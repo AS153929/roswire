@@ -106,6 +106,10 @@ pub struct Cli {
     #[arg(long = "include-remote")]
     pub include_remote: bool,
 
+    /// Read a secret value from stdin for secret set commands.
+    #[arg(long)]
+    pub stdin: bool,
+
     /// Internal test hook to exercise structured error output paths.
     #[arg(long, hide = true)]
     pub simulate_error: bool,
@@ -220,5 +224,26 @@ mod tests {
         assert_eq!(cli.protocol, Some(ProtocolMode::Rest));
         assert!(!cli.remote);
         assert!(!cli.include_remote);
+        assert!(!cli.stdin);
+    }
+
+    #[test]
+    fn supports_secret_stdin_flag() {
+        let cli = Cli::try_parse_from([
+            "roswire",
+            "secret",
+            "set",
+            "studio",
+            "password",
+            "type=plain",
+            "--stdin",
+        ])
+        .expect("stdin flag should parse");
+
+        assert!(cli.stdin);
+        assert_eq!(
+            cli.tokens,
+            vec!["secret", "set", "studio", "password", "type=plain"]
+        );
     }
 }

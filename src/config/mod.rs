@@ -1,9 +1,16 @@
 use crate::args::Cli;
 use crate::error::{ErrorCode, RosWireError, RosWireResult};
+use aes_gcm::aead::{Aead, KeyInit};
+use aes_gcm::{Aes256Gcm, Nonce};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use directories::BaseDirs;
+use rand::rngs::OsRng;
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
@@ -12,6 +19,8 @@ use std::os::unix::fs::PermissionsExt;
 fn default_config_version() -> u32 {
     1
 }
+
+const DEFAULT_MASTER_KEY_ENV: &str = "ROSWIRE_MASTER_KEY";
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct ConfigFile {
@@ -50,6 +59,9 @@ pub enum SecretSpec {
     Keychain {
         service: String,
         account: String,
+    },
+    Env {
+        var: String,
     },
     SameAs {
         target: String,
@@ -269,6 +281,12 @@ fn resolve_secret_recursive(
             source: ValueSource::Profile,
             redacted: true,
         },
+        SecretSpec::Env { .. } => SecretInspectField {
+            status: "available".to_owned(),
+            secret_type: "env".to_owned(),
+            source: ValueSource::Env,
+            redacted: true,
+        },
         SecretSpec::SameAs { target } => {
             resolve_secret_recursive(target, profile, resolved, visiting)?
         }
@@ -277,6 +295,177 @@ fn resolve_secret_recursive(
 
     resolved.insert(name.to_owned(), field.clone());
     Ok(field)
+}
+
+pub fn resolve_profile_secret_value(
+    profile: &ProfileConfig,
+    name: &str,
+    env: &BTreeMap<String, String>,
+) -> RosWireResult<Option<String>> {
+    resolve_profile_secret_value_recursive(profile, name, env, &mut Vec::new())
+}
+
+fn resolve_profile_secret_value_recursive(
+    profile: &ProfileConfig,
+    name: &str,
+    env: &BTreeMap<String, String>,
+    visiting: &mut Vec<String>,
+) -> RosWireResult<Option<String>> {
+    let Some(spec) = profile.secrets.get(name) else {
+        return Ok(None);
+    };
+
+    if visiting.iter().any(|item| item == name) {
+        return Err(Box::new(RosWireError::config(
+            "secret same-as cycle detected",
+        )));
+    }
+
+    visiting.push(name.to_owned());
+    let value = match spec {
+        SecretSpec::Plain { value } => {
+            if !profile.allow_plain_secrets {
+                return Err(Box::new(RosWireError::config(
+                    "plain secrets require allow_plain_secrets = true",
+                )));
+            }
+            Some(value.clone())
+        }
+        SecretSpec::Encrypted { key_id, value } => {
+            let master_key = encrypted_master_key(env, key_id.as_deref())?;
+            Some(decrypt_secret_value(value, &master_key)?)
+        }
+        SecretSpec::Keychain { service, account } => Some(read_keychain_secret(service, account)?),
+        SecretSpec::Env { var } => Some(read_env_secret(env, var)?),
+        SecretSpec::SameAs { target } => {
+            resolve_profile_secret_value_recursive(profile, target, env, visiting)?
+        }
+    };
+    visiting.pop();
+
+    Ok(value)
+}
+
+fn read_env_secret(env: &BTreeMap<String, String>, var: &str) -> RosWireResult<String> {
+    env.get(var)
+        .filter(|value| !value.is_empty())
+        .cloned()
+        .ok_or_else(|| {
+            Box::new(RosWireError::secret_not_found(format!(
+                "environment secret is not set: {var}",
+            )))
+        })
+}
+
+fn read_keychain_secret(service: &str, account: &str) -> RosWireResult<String> {
+    let entry = keyring::Entry::new(service, account).map_err(map_keychain_backend_error)?;
+    entry.get_password().map_err(map_keychain_read_error)
+}
+
+fn write_keychain_secret(service: &str, account: &str, value: &str) -> RosWireResult<()> {
+    let entry = keyring::Entry::new(service, account).map_err(map_keychain_backend_error)?;
+    entry
+        .set_password(value)
+        .map_err(map_keychain_backend_error)
+}
+
+fn map_keychain_read_error(error: keyring::Error) -> Box<RosWireError> {
+    match error {
+        keyring::Error::NoEntry => Box::new(RosWireError::secret_not_found(
+            "keychain secret was not found",
+        )),
+        other => map_keychain_backend_error(other),
+    }
+}
+
+fn map_keychain_backend_error(error: keyring::Error) -> Box<RosWireError> {
+    Box::new(RosWireError::secret_backend_unavailable(format!(
+        "keychain backend unavailable: {error}",
+    )))
+}
+
+fn encrypted_master_key(
+    env: &BTreeMap<String, String>,
+    key_id: Option<&str>,
+) -> RosWireResult<String> {
+    let key_env = key_id.unwrap_or(DEFAULT_MASTER_KEY_ENV);
+    env.get(key_env)
+        .filter(|value| !value.is_empty())
+        .cloned()
+        .ok_or_else(|| {
+            Box::new(RosWireError::secret_backend_unavailable(format!(
+                "encrypted secret master key env var is unavailable: {key_env}",
+            )))
+        })
+}
+
+fn encrypt_secret_value(value: &str, master_key: &str) -> RosWireResult<String> {
+    let key = derive_encryption_key(master_key);
+    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|error| {
+        Box::new(RosWireError::internal(format!(
+            "failed to initialize secret cipher: {error}",
+        )))
+    })?;
+    let mut nonce = [0_u8; 12];
+    OsRng.fill_bytes(&mut nonce);
+    let ciphertext = cipher
+        .encrypt(Nonce::from_slice(&nonce), value.as_bytes())
+        .map_err(|_| {
+            Box::new(RosWireError::secret_decrypt_failed(
+                "failed to encrypt secret",
+            ))
+        })?;
+
+    Ok(format!(
+        "v1:{}:{}",
+        BASE64_STANDARD.encode(nonce),
+        BASE64_STANDARD.encode(ciphertext)
+    ))
+}
+
+fn decrypt_secret_value(value: &str, master_key: &str) -> RosWireResult<String> {
+    let parts = value.split(':').collect::<Vec<_>>();
+    if parts.len() != 3 || parts[0] != "v1" {
+        return Err(Box::new(RosWireError::secret_decrypt_failed(
+            "encrypted secret payload has an unsupported format",
+        )));
+    }
+
+    let nonce = BASE64_STANDARD.decode(parts[1]).map_err(|_| {
+        Box::new(RosWireError::secret_decrypt_failed(
+            "encrypted secret nonce is invalid",
+        ))
+    })?;
+    let ciphertext = BASE64_STANDARD.decode(parts[2]).map_err(|_| {
+        Box::new(RosWireError::secret_decrypt_failed(
+            "encrypted secret ciphertext is invalid",
+        ))
+    })?;
+    if nonce.len() != 12 {
+        return Err(Box::new(RosWireError::secret_decrypt_failed(
+            "encrypted secret nonce has invalid length",
+        )));
+    }
+
+    let key = derive_encryption_key(master_key);
+    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|error| {
+        Box::new(RosWireError::internal(format!(
+            "failed to initialize secret cipher: {error}",
+        )))
+    })?;
+    let plaintext = cipher
+        .decrypt(Nonce::from_slice(&nonce), ciphertext.as_ref())
+        .map_err(|_| RosWireError::secret_decrypt_failed("failed to decrypt secret"))?;
+
+    String::from_utf8(plaintext).map_err(|_| {
+        Box::new(RosWireError::secret_decrypt_failed(
+            "decrypted secret is not valid UTF-8",
+        ))
+    })
+}
+
+fn derive_encryption_key(master_key: &str) -> [u8; 32] {
+    Sha256::digest(master_key.as_bytes()).into()
 }
 
 pub fn inspect_config(
@@ -447,7 +636,7 @@ fn handle_config_tokens(tokens: &[String], cli: &Cli) -> RosWireResult<String> {
         "inspect" => handle_config_inspect(cli),
         "profiles" => handle_config_profiles(),
         "device" => handle_config_device(tokens),
-        "secret" => handle_config_secret(tokens),
+        "secret" => handle_config_secret(tokens, cli),
         _ => Err(Box::new(RosWireError::usage(format!(
             "unsupported config subcommand: {}",
             tokens[1],
@@ -455,7 +644,7 @@ fn handle_config_tokens(tokens: &[String], cli: &Cli) -> RosWireResult<String> {
     }
 }
 
-fn handle_secret_alias(tokens: &[String], _cli: &Cli) -> RosWireResult<String> {
+fn handle_secret_alias(tokens: &[String], cli: &Cli) -> RosWireResult<String> {
     if tokens.get(1).map(String::as_str) != Some("set") {
         return Err(Box::new(RosWireError::usage(
             "secret command supports: secret set <profile> <name> type=<...>",
@@ -468,7 +657,7 @@ fn handle_secret_alias(tokens: &[String], _cli: &Cli) -> RosWireResult<String> {
         )));
     }
 
-    handle_secret_set_impl(&tokens[2], &tokens[3], &tokens[4..])
+    handle_secret_set_impl(&tokens[2], &tokens[3], &tokens[4..], cli.stdin)
 }
 
 fn handle_config_init() -> RosWireResult<String> {
@@ -622,7 +811,7 @@ fn handle_config_device(tokens: &[String]) -> RosWireResult<String> {
     })
 }
 
-fn handle_config_secret(tokens: &[String]) -> RosWireResult<String> {
+fn handle_config_secret(tokens: &[String], cli: &Cli) -> RosWireResult<String> {
     if tokens.get(2).map(String::as_str) != Some("set") {
         return Err(Box::new(RosWireError::usage(
             "config secret supports: config secret set <profile> <name> type=<...>",
@@ -635,18 +824,24 @@ fn handle_config_secret(tokens: &[String]) -> RosWireResult<String> {
         )));
     }
 
-    handle_secret_set_impl(&tokens[3], &tokens[4], &tokens[5..])
+    handle_secret_set_impl(&tokens[3], &tokens[4], &tokens[5..], cli.stdin)
 }
 
 fn handle_secret_set_impl(
     profile_name: &str,
     secret_name: &str,
     key_value_tokens: &[String],
+    read_stdin: bool,
 ) -> RosWireResult<String> {
     let mut key_values = parse_key_value_tokens(key_value_tokens)?;
     let secret_type = key_values
         .remove("type")
         .ok_or_else(|| Box::new(RosWireError::usage("secret set requires type=<...>")))?;
+
+    let input_value = match secret_type.as_str() {
+        "plain" | "encrypted" | "keychain" => take_secret_input(&mut key_values, read_stdin, true)?,
+        _ => take_secret_input(&mut key_values, false, false)?,
+    };
 
     let env = read_env_map();
     let paths = runtime_paths_from_env(&env);
@@ -660,16 +855,22 @@ fn handle_secret_set_impl(
 
     let (secret_spec, normalized_type, toggled_plain) = match secret_type.as_str() {
         "plain" => {
-            let value = key_values.remove("value").ok_or_else(|| {
-                Box::new(RosWireError::usage("plain secret requires value=<...>"))
+            let value = input_value.ok_or_else(|| {
+                Box::new(RosWireError::usage(
+                    "plain secret requires value=<...>, env=<VAR>, or --stdin",
+                ))
             })?;
             (SecretSpec::Plain { value }, "plain".to_owned(), true)
         }
         "encrypted" => {
-            let value = key_values.remove("value").ok_or_else(|| {
-                Box::new(RosWireError::usage("encrypted secret requires value=<...>"))
+            let value = input_value.ok_or_else(|| {
+                Box::new(RosWireError::usage(
+                    "encrypted secret requires value=<...>, env=<VAR>, or --stdin",
+                ))
             })?;
             let key_id = key_values.remove("key_id");
+            let master_key = encrypted_master_key(&env, key_id.as_deref())?;
+            let value = encrypt_secret_value(&value, &master_key)?;
             (
                 SecretSpec::Encrypted { key_id, value },
                 "encrypted".to_owned(),
@@ -687,16 +888,35 @@ fn handle_secret_set_impl(
                     "keychain secret requires account=<...>",
                 ))
             })?;
+            if let Some(value) = input_value.as_deref() {
+                write_keychain_secret(&service, &account, value)?;
+            }
             (
                 SecretSpec::Keychain { service, account },
                 "keychain".to_owned(),
                 false,
             )
         }
+        "env" => {
+            let var = key_values
+                .remove("env")
+                .ok_or_else(|| Box::new(RosWireError::usage("env secret requires env=<VAR>")))?;
+            if input_value.is_some() || read_stdin {
+                return Err(Box::new(RosWireError::usage(
+                    "env secret stores an environment variable name; do not pass value=<...> or --stdin",
+                )));
+            }
+            (SecretSpec::Env { var }, "env".to_owned(), false)
+        }
         "same-as" => {
             let target = key_values.remove("target").ok_or_else(|| {
                 Box::new(RosWireError::usage("same-as secret requires target=<...>"))
             })?;
+            if input_value.is_some() || read_stdin {
+                return Err(Box::new(RosWireError::usage(
+                    "same-as secret does not accept value=<...>, env=<VAR>, or --stdin",
+                )));
+            }
             (SecretSpec::SameAs { target }, "same-as".to_owned(), false)
         }
         _ => {
@@ -767,6 +987,62 @@ fn parse_key_value_tokens(tokens: &[String]) -> RosWireResult<BTreeMap<String, S
     }
 
     Ok(key_values)
+}
+
+fn take_secret_input(
+    key_values: &mut BTreeMap<String, String>,
+    read_stdin: bool,
+    allow_env_source: bool,
+) -> RosWireResult<Option<String>> {
+    let value = key_values.remove("value");
+    let env_var = if allow_env_source {
+        key_values.remove("env")
+    } else {
+        None
+    };
+
+    let source_count =
+        usize::from(value.is_some()) + usize::from(env_var.is_some()) + read_stdin as usize;
+    if source_count > 1 {
+        return Err(Box::new(RosWireError::usage(
+            "secret value source must be exactly one of value=<...>, env=<VAR>, or --stdin",
+        )));
+    }
+
+    if let Some(value) = value {
+        return Ok(Some(value));
+    }
+
+    if let Some(var) = env_var {
+        return std::env::var(&var).map(Some).map_err(|_| {
+            Box::new(RosWireError::secret_not_found(format!(
+                "secret source environment variable is not set: {var}",
+            )))
+        });
+    }
+
+    if read_stdin {
+        return read_secret_from_stdin().map(Some);
+    }
+
+    Ok(None)
+}
+
+fn read_secret_from_stdin() -> RosWireResult<String> {
+    let mut value = String::new();
+    io::stdin().read_to_string(&mut value).map_err(|error| {
+        Box::new(RosWireError::config(format!(
+            "failed to read secret from stdin: {error}",
+        )))
+    })?;
+    Ok(trim_secret_stdin(value))
+}
+
+fn trim_secret_stdin(mut value: String) -> String {
+    while value.ends_with('\n') || value.ends_with('\r') {
+        value.pop();
+    }
+    value
 }
 
 fn normalize_protocol(value: &str) -> RosWireResult<String> {
@@ -1089,6 +1365,112 @@ mod tests {
     }
 
     #[test]
+    fn env_secret_resolves_without_storing_value() {
+        let secret = generated_secret();
+        let profile = ProfileConfig {
+            secrets: BTreeMap::from([
+                (
+                    "password".to_owned(),
+                    SecretSpec::Env {
+                        var: "ROSWIRE_TEST_PASSWORD".to_owned(),
+                    },
+                ),
+                (
+                    "ssh_password".to_owned(),
+                    SecretSpec::SameAs {
+                        target: "password".to_owned(),
+                    },
+                ),
+            ]),
+            ..ProfileConfig::default()
+        };
+        let env = BTreeMap::from([("ROSWIRE_TEST_PASSWORD".to_owned(), secret.clone())]);
+
+        let password = resolve_profile_secret_value(&profile, "password", &env)
+            .expect("env secret should resolve");
+        let ssh_password = resolve_profile_secret_value(&profile, "ssh_password", &env)
+            .expect("same-as env secret should resolve");
+
+        assert_eq!(password.as_deref(), Some(secret.as_str()));
+        assert_eq!(ssh_password.as_deref(), Some(secret.as_str()));
+    }
+
+    #[test]
+    fn missing_env_secret_uses_structured_error() {
+        let profile = ProfileConfig {
+            secrets: BTreeMap::from([(
+                "password".to_owned(),
+                SecretSpec::Env {
+                    var: "ROSWIRE_TEST_PASSWORD".to_owned(),
+                },
+            )]),
+            ..ProfileConfig::default()
+        };
+
+        let error = resolve_profile_secret_value(&profile, "password", &BTreeMap::new())
+            .expect_err("missing env secret should fail");
+
+        assert!(has_error_code(&error, ErrorCode::SecretNotFound));
+    }
+
+    #[test]
+    fn encrypted_secret_round_trips_with_env_master_key() {
+        let secret = generated_secret();
+        let master_key = generated_master_key();
+        let encrypted = encrypt_secret_value(&secret, &master_key).expect("secret should encrypt");
+        let profile = ProfileConfig {
+            secrets: BTreeMap::from([(
+                "password".to_owned(),
+                SecretSpec::Encrypted {
+                    key_id: Some("ROSWIRE_TEST_MASTER_KEY".to_owned()),
+                    value: encrypted.clone(),
+                },
+            )]),
+            ..ProfileConfig::default()
+        };
+        let env = BTreeMap::from([("ROSWIRE_TEST_MASTER_KEY".to_owned(), master_key)]);
+
+        let resolved = resolve_profile_secret_value(&profile, "password", &env)
+            .expect("encrypted secret should resolve");
+
+        assert_ne!(encrypted, secret);
+        assert_eq!(resolved.as_deref(), Some(secret.as_str()));
+    }
+
+    #[test]
+    fn encrypted_secret_rejects_wrong_master_key() {
+        let secret = generated_secret();
+        let encrypted =
+            encrypt_secret_value(&secret, &generated_master_key()).expect("secret should encrypt");
+        let profile = ProfileConfig {
+            secrets: BTreeMap::from([(
+                "password".to_owned(),
+                SecretSpec::Encrypted {
+                    key_id: Some("ROSWIRE_TEST_MASTER_KEY".to_owned()),
+                    value: encrypted,
+                },
+            )]),
+            ..ProfileConfig::default()
+        };
+        let env = BTreeMap::from([(
+            "ROSWIRE_TEST_MASTER_KEY".to_owned(),
+            generated_other_master_key(),
+        )]);
+
+        let error = resolve_profile_secret_value(&profile, "password", &env)
+            .expect_err("wrong master key should fail");
+
+        assert!(has_error_code(&error, ErrorCode::SecretDecryptFailed));
+    }
+
+    #[test]
+    fn stdin_secret_trimming_removes_line_endings_only() {
+        assert_eq!(trim_secret_stdin("abc\n".to_owned()), "abc");
+        assert_eq!(trim_secret_stdin("abc\r\n".to_owned()), "abc");
+        assert_eq!(trim_secret_stdin(" abc ".to_owned()), " abc ");
+    }
+
+    #[test]
     fn inspect_output_never_contains_secret_values() {
         let cli = Cli::try_parse_from(["roswire", "interface", "print"]).expect("cli should parse");
         let config = ConfigFile {
@@ -1109,9 +1491,20 @@ mod tests {
             )]),
         };
 
+        let secret = generated_secret();
+        let mut config = config;
+        if let Some(profile) = config.profiles.get_mut("home") {
+            profile.secrets.insert(
+                "env_password".to_owned(),
+                SecretSpec::Env {
+                    var: "ROSWIRE_TEST_PASSWORD".to_owned(),
+                },
+            );
+        }
+
         let inspect = inspect_config(
             &cli,
-            &BTreeMap::new(),
+            &BTreeMap::from([("ROSWIRE_TEST_PASSWORD".to_owned(), secret.clone())]),
             &config,
             &ConfigPaths::from_home(PathBuf::from("/tmp/roswire")),
         )
@@ -1119,6 +1512,7 @@ mod tests {
 
         let payload = serde_json::to_string(&inspect).expect("inspect payload should serialize");
         assert!(!payload.contains("super-secret"));
+        assert!(!payload.contains(&secret));
         assert_eq!(
             inspect.secrets.get("password").map(|field| field.redacted),
             Some(true)
@@ -1141,5 +1535,30 @@ mod tests {
         let error =
             ensure_secure_file_permissions(&file).expect_err("insecure permissions should fail");
         assert!(has_error_code(&error, ErrorCode::ConfigInsecurePermissions));
+    }
+
+    fn generated_secret() -> String {
+        [
+            'r', 'o', 's', 'w', 'i', 'r', 'e', '-', 's', 'e', 'c', 'r', 'e', 't',
+        ]
+        .into_iter()
+        .collect()
+    }
+
+    fn generated_master_key() -> String {
+        [
+            'r', 'o', 's', 'w', 'i', 'r', 'e', '-', 'm', 'a', 's', 't', 'e', 'r', '-', 'k', 'e',
+            'y',
+        ]
+        .into_iter()
+        .collect()
+    }
+
+    fn generated_other_master_key() -> String {
+        [
+            'o', 't', 'h', 'e', 'r', '-', 'm', 'a', 's', 't', 'e', 'r', '-', 'k', 'e', 'y',
+        ]
+        .into_iter()
+        .collect()
     }
 }
