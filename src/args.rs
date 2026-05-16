@@ -10,6 +10,17 @@ pub enum ProtocolMode {
     Rest,
 }
 
+impl ProtocolMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Api => "api",
+            Self::ApiSsl => "api-ssl",
+            Self::Rest => "rest",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum RouterOsVersionMode {
     Auto,
@@ -17,9 +28,27 @@ pub enum RouterOsVersionMode {
     V7,
 }
 
+impl RouterOsVersionMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::V6 => "v6",
+            Self::V7 => "v7",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum TransferMode {
     Ssh,
+}
+
+impl TransferMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ssh => "ssh",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,14 +78,14 @@ pub struct Cli {
     #[arg(long)]
     pub password: Option<String>,
 
-    #[arg(long, value_enum, default_value_t = ProtocolMode::Auto)]
-    pub protocol: ProtocolMode,
+    #[arg(long, value_enum)]
+    pub protocol: Option<ProtocolMode>,
 
-    #[arg(long = "routeros-version", value_enum, default_value_t = RouterOsVersionMode::Auto)]
-    pub routeros_version: RouterOsVersionMode,
+    #[arg(long = "routeros-version", value_enum)]
+    pub routeros_version: Option<RouterOsVersionMode>,
 
-    #[arg(long, value_enum, default_value_t = TransferMode::Ssh)]
-    pub transfer: TransferMode,
+    #[arg(long, value_enum)]
+    pub transfer: Option<TransferMode>,
 
     #[arg(long)]
     pub port: Option<u16>,
@@ -180,6 +209,6 @@ mod tests {
         let cli = Cli::try_parse_from(["roswire", "--protocol", "rest", "ip", "address", "print"])
             .expect("protocol enum should parse");
 
-        assert_eq!(cli.protocol, ProtocolMode::Rest);
+        assert_eq!(cli.protocol, Some(ProtocolMode::Rest));
     }
 }

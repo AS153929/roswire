@@ -7,6 +7,8 @@ use thiserror::Error;
 pub enum ErrorCode {
     UsageError,
     ConfigError,
+    ProfileNotFound,
+    ConfigInsecurePermissions,
     AuthFailed,
     NetworkError,
     RosApiFailure,
@@ -111,6 +113,27 @@ impl RosWireError {
             hint: None,
             context: ErrorContext::default(),
             exit_code: 5,
+        }
+    }
+
+    pub fn profile_not_found(profile: impl Into<String>) -> Self {
+        let profile = profile.into();
+        Self {
+            error_code: ErrorCode::ProfileNotFound,
+            message: format!("profile not found: {profile}"),
+            hint: Some("set --profile, ROS_PROFILE, or default_profile".to_owned()),
+            context: ErrorContext::default(),
+            exit_code: 2,
+        }
+    }
+
+    pub fn config_insecure_permissions(message: impl Into<String>) -> Self {
+        Self {
+            error_code: ErrorCode::ConfigInsecurePermissions,
+            message: message.into(),
+            hint: Some("fix permissions to 0700 for directories and 0600 for files".to_owned()),
+            context: ErrorContext::default(),
+            exit_code: 2,
         }
     }
 
@@ -248,6 +271,14 @@ mod tests {
         let config = RosWireError::config("bad config");
         assert_eq!(config.error_code, ErrorCode::ConfigError);
         assert_eq!(config.exit_code(), 2);
+
+        let profile_missing = RosWireError::profile_not_found("home");
+        assert_eq!(profile_missing.error_code, ErrorCode::ProfileNotFound);
+        assert_eq!(profile_missing.exit_code(), 2);
+
+        let insecure = RosWireError::config_insecure_permissions("too wide");
+        assert_eq!(insecure.error_code, ErrorCode::ConfigInsecurePermissions);
+        assert_eq!(insecure.exit_code(), 2);
 
         let auth = RosWireError::auth_failed("invalid credentials");
         assert_eq!(auth.error_code, ErrorCode::AuthFailed);
