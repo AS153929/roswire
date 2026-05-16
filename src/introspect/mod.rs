@@ -1,2 +1,371 @@
-#[derive(Debug, Default)]
-pub struct IntrospectModule;
+use crate::error::{RosWireError, RosWireResult};
+use serde::Serialize;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ArgumentSpec {
+    pub name: String,
+    pub style: String,
+    pub required: bool,
+    #[serde(rename = "type")]
+    pub arg_type: String,
+    pub description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub example: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CommandDefinition {
+    pub name: String,
+    pub summary: String,
+    pub kind: String,
+    pub syntax: String,
+    pub arguments: Vec<ArgumentSpec>,
+    pub examples: Vec<String>,
+    pub errors: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct CommandsPayload {
+    schema_version: &'static str,
+    commands: Vec<CommandSummary>,
+}
+
+#[derive(Debug, Serialize)]
+struct CommandSummary {
+    name: String,
+    summary: String,
+    kind: String,
+}
+
+#[derive(Debug, Serialize)]
+struct HelpPayload {
+    schema_version: &'static str,
+    command: CommandDefinition,
+}
+
+#[derive(Debug, Serialize)]
+struct HelpIndexPayload {
+    schema_version: &'static str,
+    global_options: Vec<String>,
+    commands: Vec<CommandSummary>,
+}
+
+#[derive(Debug, Serialize)]
+struct SchemaPayload {
+    schema_version: &'static str,
+    command: String,
+    arguments: Vec<ArgumentSpec>,
+}
+
+#[derive(Debug, Serialize)]
+struct ExplainErrorPayload {
+    schema_version: &'static str,
+    error_code: String,
+    summary: String,
+    common_causes: Vec<String>,
+    suggested_next_steps: Vec<String>,
+}
+
+pub fn handle(tokens: &[String]) -> Option<RosWireResult<String>> {
+    if tokens.is_empty() {
+        return None;
+    }
+
+    let command = tokens[0].as_str();
+    match command {
+        "commands" => Some(render_json(&commands_payload())),
+        "help" => Some(help_payload(tokens)),
+        "schema" => Some(schema_payload(tokens)),
+        "explain-error" => Some(explain_error_payload(tokens)),
+        _ => None,
+    }
+}
+
+fn commands_payload() -> CommandsPayload {
+    let commands = catalog()
+        .into_iter()
+        .map(|entry| CommandSummary {
+            name: entry.name,
+            summary: entry.summary,
+            kind: entry.kind,
+        })
+        .collect();
+
+    CommandsPayload {
+        schema_version: "roswire.commands.v1",
+        commands,
+    }
+}
+
+fn help_payload(tokens: &[String]) -> RosWireResult<String> {
+    if tokens.len() == 1 {
+        let payload = HelpIndexPayload {
+            schema_version: "roswire.help.index.v1",
+            global_options: vec![
+                "--profile".to_owned(),
+                "--host".to_owned(),
+                "--user".to_owned(),
+                "--password".to_owned(),
+                "--protocol".to_owned(),
+                "--routeros-version".to_owned(),
+                "--transfer".to_owned(),
+                "--port".to_owned(),
+                "--json".to_owned(),
+                "--debug".to_owned(),
+            ],
+            commands: commands_payload().commands,
+        };
+        return render_json(&payload);
+    }
+
+    let topic = normalize_topic(&tokens[1..]);
+    let command = lookup_command(&topic)
+        .ok_or_else(|| Box::new(RosWireError::help_topic_not_found(topic.clone())))?;
+
+    render_json(&HelpPayload {
+        schema_version: "roswire.command.help.v1",
+        command,
+    })
+}
+
+fn schema_payload(tokens: &[String]) -> RosWireResult<String> {
+    if tokens.len() < 3 || tokens[1].as_str() != "command" {
+        return Err(Box::new(RosWireError::usage(
+            "schema command requires: roswire schema command <command...>",
+        )));
+    }
+
+    let topic = normalize_topic(&tokens[2..]);
+    let command = lookup_command(&topic)
+        .ok_or_else(|| Box::new(RosWireError::schema_unavailable(topic.clone())))?;
+
+    render_json(&SchemaPayload {
+        schema_version: "roswire.command.schema.v1",
+        command: command.name,
+        arguments: command.arguments,
+    })
+}
+
+fn explain_error_payload(tokens: &[String]) -> RosWireResult<String> {
+    if tokens.len() < 2 {
+        return Err(Box::new(RosWireError::usage(
+            "missing error code: roswire explain-error <CODE>",
+        )));
+    }
+
+    let code = tokens[1].to_ascii_uppercase();
+    let payload = match code.as_str() {
+        "ROS_API_FAILURE" => ExplainErrorPayload {
+            schema_version: "roswire.error.explain.v1",
+            error_code: code,
+            summary: "RouterOS returned a trap or command failure.".to_owned(),
+            common_causes: vec![
+                "target interface/item does not exist".to_owned(),
+                "argument value does not match menu expectations".to_owned(),
+            ],
+            suggested_next_steps: vec![
+                "run `roswire interface print --json` to discover valid interfaces".to_owned(),
+                "verify key=value arguments and .id references".to_owned(),
+            ],
+        },
+        "USAGE_ERROR" => ExplainErrorPayload {
+            schema_version: "roswire.error.explain.v1",
+            error_code: code,
+            summary: "CLI arguments are missing or invalid.".to_owned(),
+            common_causes: vec![
+                "missing action token".to_owned(),
+                "malformed key=value argument".to_owned(),
+            ],
+            suggested_next_steps: vec![
+                "run `roswire help --json` to inspect command contracts".to_owned(),
+                "run `roswire commands --json` for command discovery".to_owned(),
+            ],
+        },
+        _ => {
+            return Err(Box::new(RosWireError::help_topic_not_found(format!(
+                "error code {code}",
+            ))));
+        }
+    };
+
+    render_json(&payload)
+}
+
+fn render_json<T: Serialize>(value: &T) -> RosWireResult<String> {
+    serde_json::to_string(value).map_err(|error| {
+        Box::new(RosWireError::internal(format!(
+            "failed to serialize introspection payload: {error}",
+        )))
+    })
+}
+
+fn normalize_topic(tokens: &[String]) -> String {
+    tokens
+        .iter()
+        .flat_map(|token| token.split_whitespace())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+}
+
+fn lookup_command(topic: &str) -> Option<CommandDefinition> {
+    catalog()
+        .into_iter()
+        .find(|command| command.name.eq_ignore_ascii_case(topic))
+}
+
+fn catalog() -> Vec<CommandDefinition> {
+    vec![
+        CommandDefinition {
+            name: "ip address print".to_owned(),
+            summary: "Print IP address records.".to_owned(),
+            kind: "routeros-command".to_owned(),
+            syntax: "roswire ip address print --json".to_owned(),
+            arguments: vec![],
+            examples: vec!["roswire ip address print --json".to_owned()],
+            errors: vec![
+                "USAGE_ERROR".to_owned(),
+                "AUTH_FAILED".to_owned(),
+                "NETWORK_ERROR".to_owned(),
+                "ROS_API_FAILURE".to_owned(),
+            ],
+        },
+        CommandDefinition {
+            name: "ip address add".to_owned(),
+            summary: "Add an IP address entry.".to_owned(),
+            kind: "routeros-command".to_owned(),
+            syntax: "roswire ip address add address=<cidr> interface=<name> --json".to_owned(),
+            arguments: vec![
+                ArgumentSpec {
+                    name: "address".to_owned(),
+                    style: "key-value".to_owned(),
+                    required: true,
+                    arg_type: "cidr".to_owned(),
+                    description: "Address with prefix length.".to_owned(),
+                    example: Some("192.168.88.2/24".to_owned()),
+                },
+                ArgumentSpec {
+                    name: "interface".to_owned(),
+                    style: "key-value".to_owned(),
+                    required: true,
+                    arg_type: "string".to_owned(),
+                    description: "RouterOS interface name.".to_owned(),
+                    example: Some("bridge".to_owned()),
+                },
+            ],
+            examples: vec![
+                "roswire ip address add address=192.168.88.2/24 interface=bridge --json".to_owned(),
+            ],
+            errors: vec![
+                "USAGE_ERROR".to_owned(),
+                "AUTH_FAILED".to_owned(),
+                "NETWORK_ERROR".to_owned(),
+                "ROS_API_FAILURE".to_owned(),
+            ],
+        },
+        CommandDefinition {
+            name: "ip address set".to_owned(),
+            summary: "Update an existing IP address entry.".to_owned(),
+            kind: "routeros-command".to_owned(),
+            syntax: "roswire ip address set .id=<id> disabled=<bool> --json".to_owned(),
+            arguments: vec![
+                ArgumentSpec {
+                    name: ".id".to_owned(),
+                    style: "key-value".to_owned(),
+                    required: true,
+                    arg_type: "string".to_owned(),
+                    description: "RouterOS internal item ID.".to_owned(),
+                    example: Some("*1".to_owned()),
+                },
+                ArgumentSpec {
+                    name: "disabled".to_owned(),
+                    style: "key-value".to_owned(),
+                    required: false,
+                    arg_type: "bool".to_owned(),
+                    description: "Disable or enable the address entry.".to_owned(),
+                    example: Some("true".to_owned()),
+                },
+            ],
+            examples: vec!["roswire ip address set .id=*1 disabled=true --json".to_owned()],
+            errors: vec![
+                "USAGE_ERROR".to_owned(),
+                "AUTH_FAILED".to_owned(),
+                "NETWORK_ERROR".to_owned(),
+                "ROS_API_FAILURE".to_owned(),
+            ],
+        },
+        CommandDefinition {
+            name: "ip address remove".to_owned(),
+            summary: "Remove an IP address entry.".to_owned(),
+            kind: "routeros-command".to_owned(),
+            syntax: "roswire ip address remove .id=<id> --json".to_owned(),
+            arguments: vec![ArgumentSpec {
+                name: ".id".to_owned(),
+                style: "key-value".to_owned(),
+                required: true,
+                arg_type: "string".to_owned(),
+                description: "RouterOS internal item ID.".to_owned(),
+                example: Some("*1".to_owned()),
+            }],
+            examples: vec!["roswire ip address remove .id=*1 --json".to_owned()],
+            errors: vec![
+                "USAGE_ERROR".to_owned(),
+                "AUTH_FAILED".to_owned(),
+                "NETWORK_ERROR".to_owned(),
+                "ROS_API_FAILURE".to_owned(),
+            ],
+        },
+        CommandDefinition {
+            name: "interface print".to_owned(),
+            summary: "Print interface list.".to_owned(),
+            kind: "routeros-command".to_owned(),
+            syntax: "roswire interface print --json".to_owned(),
+            arguments: vec![],
+            examples: vec!["roswire interface print --json".to_owned()],
+            errors: vec![
+                "USAGE_ERROR".to_owned(),
+                "AUTH_FAILED".to_owned(),
+                "NETWORK_ERROR".to_owned(),
+                "ROS_API_FAILURE".to_owned(),
+            ],
+        },
+        CommandDefinition {
+            name: "config inspect".to_owned(),
+            summary: "Inspect resolved local configuration and source precedence.".to_owned(),
+            kind: "config".to_owned(),
+            syntax: "roswire config inspect --json".to_owned(),
+            arguments: vec![],
+            examples: vec!["roswire config inspect --json".to_owned()],
+            errors: vec![
+                "CONFIG_ERROR".to_owned(),
+                "PROFILE_NOT_FOUND".to_owned(),
+                "CONFIG_INSECURE_PERMISSIONS".to_owned(),
+            ],
+        },
+        CommandDefinition {
+            name: "commands".to_owned(),
+            summary: "List command index for agent discovery.".to_owned(),
+            kind: "introspection".to_owned(),
+            syntax: "roswire commands --json".to_owned(),
+            arguments: vec![],
+            examples: vec!["roswire commands --json".to_owned()],
+            errors: vec!["USAGE_ERROR".to_owned()],
+        },
+        CommandDefinition {
+            name: "schema command".to_owned(),
+            summary: "Show argument schema for a command topic.".to_owned(),
+            kind: "introspection".to_owned(),
+            syntax: "roswire schema command ip address add --json".to_owned(),
+            arguments: vec![ArgumentSpec {
+                name: "command".to_owned(),
+                style: "positional".to_owned(),
+                required: true,
+                arg_type: "string".to_owned(),
+                description: "Command topic, e.g. `ip address add`.".to_owned(),
+                example: Some("ip address add".to_owned()),
+            }],
+            examples: vec!["roswire schema command ip address add --json".to_owned()],
+            errors: vec!["SCHEMA_UNAVAILABLE".to_owned(), "USAGE_ERROR".to_owned()],
+        },
+    ]
+}

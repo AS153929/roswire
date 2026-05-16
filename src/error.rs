@@ -9,6 +9,8 @@ pub enum ErrorCode {
     ConfigError,
     ProfileNotFound,
     ConfigInsecurePermissions,
+    HelpTopicNotFound,
+    SchemaUnavailable,
     AuthFailed,
     NetworkError,
     RosApiFailure,
@@ -132,6 +134,28 @@ impl RosWireError {
             error_code: ErrorCode::ConfigInsecurePermissions,
             message: message.into(),
             hint: Some("fix permissions to 0700 for directories and 0600 for files".to_owned()),
+            context: ErrorContext::default(),
+            exit_code: 2,
+        }
+    }
+
+    pub fn help_topic_not_found(topic: impl Into<String>) -> Self {
+        let topic = topic.into();
+        Self {
+            error_code: ErrorCode::HelpTopicNotFound,
+            message: format!("help topic not found: {topic}"),
+            hint: Some("run `roswire commands --json` to discover available commands".to_owned()),
+            context: ErrorContext::default(),
+            exit_code: 2,
+        }
+    }
+
+    pub fn schema_unavailable(topic: impl Into<String>) -> Self {
+        let topic = topic.into();
+        Self {
+            error_code: ErrorCode::SchemaUnavailable,
+            message: format!("schema unavailable: {topic}"),
+            hint: Some("check command availability with `roswire commands --json`".to_owned()),
             context: ErrorContext::default(),
             exit_code: 2,
         }
@@ -279,6 +303,14 @@ mod tests {
         let insecure = RosWireError::config_insecure_permissions("too wide");
         assert_eq!(insecure.error_code, ErrorCode::ConfigInsecurePermissions);
         assert_eq!(insecure.exit_code(), 2);
+
+        let help_missing = RosWireError::help_topic_not_found("foo bar");
+        assert_eq!(help_missing.error_code, ErrorCode::HelpTopicNotFound);
+        assert_eq!(help_missing.exit_code(), 2);
+
+        let schema_missing = RosWireError::schema_unavailable("foo bar");
+        assert_eq!(schema_missing.error_code, ErrorCode::SchemaUnavailable);
+        assert_eq!(schema_missing.exit_code(), 2);
 
         let auth = RosWireError::auth_failed("invalid credentials");
         assert_eq!(auth.error_code, ErrorCode::AuthFailed);
