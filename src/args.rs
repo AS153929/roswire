@@ -102,6 +102,10 @@ pub struct Cli {
     #[arg(long)]
     pub remote: bool,
 
+    /// Build a plan without connecting to or modifying RouterOS.
+    #[arg(long = "dry-run")]
+    pub dry_run: bool,
+
     /// Include read-only remote RouterOS diagnostics for doctor.
     #[arg(long = "include-remote")]
     pub include_remote: bool,
@@ -109,6 +113,38 @@ pub struct Cli {
     /// Read a secret value from stdin for secret set commands.
     #[arg(long)]
     pub stdin: bool,
+
+    /// Expected RouterOS SSH host key fingerprint for transfer workflows.
+    #[arg(long = "ssh-host-key")]
+    pub ssh_host_key: Option<String>,
+
+    /// Allow-list CIDR for SSH access during transfer workflows.
+    #[arg(long = "allow-from")]
+    pub allow_from: Vec<String>,
+
+    /// Permit the plan to ensure RouterOS SSH service state.
+    #[arg(long = "ensure-ssh")]
+    pub ensure_ssh: bool,
+
+    /// Restore RouterOS SSH service state after transfer workflows.
+    #[arg(long = "restore-ssh")]
+    pub restore_ssh: bool,
+
+    /// Remove temporary remote files after transfer workflows.
+    #[arg(long)]
+    pub cleanup: bool,
+
+    /// Remote path override for import/upload workflows.
+    #[arg(long = "remote-path")]
+    pub remote_path: Option<String>,
+
+    /// RouterOS-generated backup/export base name.
+    #[arg(long)]
+    pub name: Option<String>,
+
+    /// Request compact RouterOS export output.
+    #[arg(long)]
+    pub compact: bool,
 
     /// Internal test hook to exercise structured error output paths.
     #[arg(long, hide = true)]
@@ -223,6 +259,7 @@ mod tests {
 
         assert_eq!(cli.protocol, Some(ProtocolMode::Rest));
         assert!(!cli.remote);
+        assert!(!cli.dry_run);
         assert!(!cli.include_remote);
         assert!(!cli.stdin);
     }
@@ -244,6 +281,37 @@ mod tests {
         assert_eq!(
             cli.tokens,
             vec!["secret", "set", "studio", "password", "type=plain"]
+        );
+    }
+
+    #[test]
+    fn supports_transfer_dry_run_flags() {
+        let cli = Cli::try_parse_from([
+            "roswire",
+            "file",
+            "upload",
+            "setup.rsc",
+            "flash/setup.rsc",
+            "--dry-run",
+            "--ssh-host-key",
+            "SHA256:test",
+            "--allow-from",
+            "203.0.113.10/32",
+            "--ensure-ssh",
+            "--restore-ssh",
+            "--cleanup",
+        ])
+        .expect("transfer flags should parse");
+
+        assert!(cli.dry_run);
+        assert_eq!(cli.ssh_host_key.as_deref(), Some("SHA256:test"));
+        assert_eq!(cli.allow_from, vec!["203.0.113.10/32"]);
+        assert!(cli.ensure_ssh);
+        assert!(cli.restore_ssh);
+        assert!(cli.cleanup);
+        assert_eq!(
+            cli.tokens,
+            vec!["file", "upload", "setup.rsc", "flash/setup.rsc"]
         );
     }
 }

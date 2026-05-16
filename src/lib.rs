@@ -38,6 +38,12 @@ pub fn run() -> RosWireResult<()> {
         return Ok(());
     }
 
+    if let Some(result) = transfer::handle(&cli.tokens, &cli) {
+        let payload = result?;
+        println!("{payload}");
+        return Ok(());
+    }
+
     let invocation = args::parse_invocation(&cli.tokens)?;
     let request = mapping::build_protocol_request(&invocation)?;
 

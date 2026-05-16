@@ -21,6 +21,9 @@ pub enum ErrorCode {
     SecretBackendUnavailable,
     SecretNotFound,
     SecretDecryptFailed,
+    SshHostKeyRequired,
+    SshWhitelistRequired,
+    SshWhitelistUnsafe,
     InternalError,
 }
 
@@ -152,6 +155,40 @@ impl RosWireError {
             hint: Some("verify the encrypted secret master key and stored ciphertext".to_owned()),
             context: ErrorContext::default(),
             exit_code: 3,
+        }
+    }
+
+    pub fn ssh_host_key_required(message: impl Into<String>) -> Self {
+        Self {
+            error_code: ErrorCode::SshHostKeyRequired,
+            message: message.into(),
+            hint: Some(
+                "set --ssh-host-key or ROS_SSH_HOST_KEY before using SSH transfer".to_owned(),
+            ),
+            context: ErrorContext::default(),
+            exit_code: 2,
+        }
+    }
+
+    pub fn ssh_whitelist_required(message: impl Into<String>) -> Self {
+        Self {
+            error_code: ErrorCode::SshWhitelistRequired,
+            message: message.into(),
+            hint: Some("set --allow-from or ROS_SSH_ALLOW_FROM to a narrow client CIDR".to_owned()),
+            context: ErrorContext::default(),
+            exit_code: 2,
+        }
+    }
+
+    pub fn ssh_whitelist_unsafe(message: impl Into<String>) -> Self {
+        Self {
+            error_code: ErrorCode::SshWhitelistUnsafe,
+            message: message.into(),
+            hint: Some(
+                "use a narrow /32 IPv4 or /128 IPv6 client CIDR for SSH transfer".to_owned(),
+            ),
+            context: ErrorContext::default(),
+            exit_code: 2,
         }
     }
 
@@ -413,6 +450,18 @@ mod tests {
         let decrypt = RosWireError::secret_decrypt_failed("decrypt failed");
         assert_eq!(decrypt.error_code, ErrorCode::SecretDecryptFailed);
         assert_eq!(decrypt.exit_code(), 3);
+
+        let host_key = RosWireError::ssh_host_key_required("host key required");
+        assert_eq!(host_key.error_code, ErrorCode::SshHostKeyRequired);
+        assert_eq!(host_key.exit_code(), 2);
+
+        let whitelist = RosWireError::ssh_whitelist_required("allow-from required");
+        assert_eq!(whitelist.error_code, ErrorCode::SshWhitelistRequired);
+        assert_eq!(whitelist.exit_code(), 2);
+
+        let unsafe_whitelist = RosWireError::ssh_whitelist_unsafe("allow-from too wide");
+        assert_eq!(unsafe_whitelist.error_code, ErrorCode::SshWhitelistUnsafe);
+        assert_eq!(unsafe_whitelist.exit_code(), 2);
     }
 
     #[test]
