@@ -98,6 +98,10 @@ pub struct Cli {
     #[arg(long)]
     pub debug: bool,
 
+    /// Enable remote capability/schema probing for introspection commands.
+    #[arg(long)]
+    pub remote: bool,
+
     /// Internal test hook to exercise structured error output paths.
     #[arg(long, hide = true)]
     pub simulate_error: bool,
@@ -210,5 +214,6 @@ mod tests {
             .expect("protocol enum should parse");
 
         assert_eq!(cli.protocol, Some(ProtocolMode::Rest));
+        assert!(!cli.remote);
     }
 }

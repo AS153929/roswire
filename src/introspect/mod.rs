@@ -1,6 +1,9 @@
 use crate::error::{RosWireError, RosWireResult};
 use serde::Serialize;
 
+pub mod cache;
+pub mod discovery;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ArgumentSpec {
     pub name: String,
@@ -66,12 +69,24 @@ struct ExplainErrorPayload {
     suggested_next_steps: Vec<String>,
 }
 
-pub fn handle(tokens: &[String]) -> Option<RosWireResult<String>> {
+pub fn handle(tokens: &[String], remote: bool) -> Option<RosWireResult<String>> {
     if tokens.is_empty() {
         return None;
     }
 
     let command = tokens[0].as_str();
+
+    if remote
+        && (command == "commands"
+            || (command == "schema"
+                && matches!(
+                    tokens.get(1).map(String::as_str),
+                    Some("command") | Some("discover")
+                )))
+    {
+        return Some(Err(Box::new(RosWireError::remote_schema_unavailable())));
+    }
+
     match command {
         "commands" => Some(render_json(&commands_payload())),
         "help" => Some(help_payload(tokens)),

@@ -11,6 +11,9 @@ pub enum ErrorCode {
     ConfigInsecurePermissions,
     HelpTopicNotFound,
     SchemaUnavailable,
+    RemoteSchemaUnavailable,
+    CapabilityProbeFailed,
+    RemoteSchemaStale,
     AuthFailed,
     NetworkError,
     RosApiFailure,
@@ -156,6 +159,16 @@ impl RosWireError {
             error_code: ErrorCode::SchemaUnavailable,
             message: format!("schema unavailable: {topic}"),
             hint: Some("check command availability with `roswire commands --json`".to_owned()),
+            context: ErrorContext::default(),
+            exit_code: 2,
+        }
+    }
+
+    pub fn remote_schema_unavailable() -> Self {
+        Self {
+            error_code: ErrorCode::RemoteSchemaUnavailable,
+            message: "remote schema overlay is unavailable in current execution context".to_owned(),
+            hint: Some("run local static schema commands without --remote or configure remote probe support".to_owned()),
             context: ErrorContext::default(),
             exit_code: 2,
         }
@@ -311,6 +324,13 @@ mod tests {
         let schema_missing = RosWireError::schema_unavailable("foo bar");
         assert_eq!(schema_missing.error_code, ErrorCode::SchemaUnavailable);
         assert_eq!(schema_missing.exit_code(), 2);
+
+        let remote_unavailable = RosWireError::remote_schema_unavailable();
+        assert_eq!(
+            remote_unavailable.error_code,
+            ErrorCode::RemoteSchemaUnavailable
+        );
+        assert_eq!(remote_unavailable.exit_code(), 2);
 
         let auth = RosWireError::auth_failed("invalid credentials");
         assert_eq!(auth.error_code, ErrorCode::AuthFailed);
