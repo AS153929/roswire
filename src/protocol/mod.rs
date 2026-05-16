@@ -2,6 +2,7 @@ use crate::error::RosWireError;
 use crate::error::RosWireResult;
 
 pub mod classic;
+pub mod rest;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RequestedProtocol {

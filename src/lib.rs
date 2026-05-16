@@ -12,6 +12,7 @@ use clap::Parser;
 use error::{ErrorContext, RosWireResult};
 use mapping::ActionKind;
 use protocol::classic::{transport::TcpApiStream, ClassicApiSession};
+use protocol::rest::RestClient;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -52,10 +53,16 @@ pub fn run() -> RosWireResult<()> {
 
     let target = resolve_execution_target(&cli)?;
     if target.requested_protocol == "rest" {
-        return Err(Box::new(
-            error::RosWireError::unsupported_action("REST executor is not implemented yet")
-                .with_context(execution_context(&invocation, &target, "unknown")),
-        ));
+        let context = execution_context(&invocation, &target, "rest");
+        let client = RestClient::https(&target.host, target.port, &target.user, &target.password);
+        let value = with_context(client.execute_request(&request), context)?;
+        let payload = serde_json::to_string(&value).map_err(|error| {
+            Box::new(error::RosWireError::internal(format!(
+                "failed to serialize RouterOS REST response: {error}",
+            )))
+        })?;
+        println!("{payload}");
+        return Ok(());
     }
     if target.requested_protocol == "api-ssl" {
         return Err(Box::new(
