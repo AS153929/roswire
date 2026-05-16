@@ -16,6 +16,10 @@ pub struct Cli {
     #[arg(long)]
     pub debug: bool,
 
+    /// Internal test hook to exercise structured error output paths.
+    #[arg(long, hide = true)]
+    pub simulate_error: bool,
+
     /// Raw command tokens passed after global options.
     #[arg(value_name = "TOKEN")]
     pub tokens: Vec<String>,

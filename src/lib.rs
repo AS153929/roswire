@@ -12,6 +12,14 @@ use clap::Parser;
 use error::RosWireResult;
 
 pub fn run() -> RosWireResult<()> {
-    let _cli = Cli::parse();
+    let cli = Cli::parse();
+
+    if cli.simulate_error {
+        return Err(Box::new(
+            error::RosWireError::usage("simulated usage error for contract tests")
+                .with_hint("remove --simulate-error to continue"),
+        ));
+    }
+
     Ok(())
 }

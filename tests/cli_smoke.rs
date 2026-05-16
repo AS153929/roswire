@@ -24,3 +24,13 @@ fn binary_runs_without_arguments() {
     let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
     cmd.assert().success().stdout(predicate::str::is_empty());
 }
+
+#[test]
+fn structured_errors_are_written_to_stderr_only() {
+    let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
+    cmd.arg("--simulate-error")
+        .assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("\"error_code\":\"USAGE_ERROR\""));
+}
