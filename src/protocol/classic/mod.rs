@@ -1,9 +1,11 @@
+pub mod dialect;
 pub mod login;
 pub mod sentence;
 pub mod transport;
 
 use crate::error::{RosWireError, RosWireResult};
 use crate::mapping::ProtocolRequest;
+use crate::protocol::classic::dialect::{ClassicDialect, Dialect};
 use crate::protocol::RouterOsMajor;
 use sentence::{parse_api_sentence, read_sentence, write_sentence, SentenceKind};
 use std::collections::BTreeMap;
@@ -71,13 +73,7 @@ pub struct ResourceInfo {
 
 impl ResourceInfo {
     pub fn routeros_major(&self) -> RouterOsMajor {
-        if self.version.starts_with('6') {
-            RouterOsMajor::V6
-        } else if self.version.starts_with('7') {
-            RouterOsMajor::V7
-        } else {
-            RouterOsMajor::Unknown
-        }
+        ClassicDialect::from_resource_info(self).routeros_major()
     }
 }
 
