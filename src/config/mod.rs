@@ -13,7 +13,7 @@ fn default_config_version() -> u32 {
     1
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct ConfigFile {
     #[serde(default = "default_config_version")]
     pub version: u32,
@@ -23,7 +23,7 @@ pub struct ConfigFile {
     pub profiles: BTreeMap<String, ProfileConfig>,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct ProfileConfig {
     pub host: Option<String>,
     pub user: Option<String>,
@@ -37,7 +37,7 @@ pub struct ProfileConfig {
     pub secrets: BTreeMap<String, SecretSpec>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum SecretSpec {
     Plain {
@@ -62,7 +62,6 @@ pub struct ConfigPaths {
     pub config: PathBuf,
     pub logs: PathBuf,
 }
-
 impl ConfigPaths {
     pub fn from_home(home: PathBuf) -> Self {
         Self {
@@ -385,6 +384,506 @@ fn insert_resolved_field(
 
 pub fn has_error_code(error: &RosWireError, expected: ErrorCode) -> bool {
     error.error_code == expected
+}
+
+#[derive(Debug, Serialize)]
+struct ConfigInitPayload {
+    schema_version: &'static str,
+    operation: &'static str,
+    created_home: bool,
+    created_config: bool,
+    paths: ConfigInspectPaths,
+}
+
+#[derive(Debug, Serialize)]
+struct ConfigProfilesPayload {
+    schema_version: &'static str,
+    default_profile: Option<String>,
+    profiles: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ConfigDevicePayload {
+    schema_version: &'static str,
+    operation: &'static str,
+    profile: String,
+    updated_fields: Vec<String>,
+    default_profile: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ConfigSecretPayload {
+    schema_version: &'static str,
+    operation: &'static str,
+    profile: String,
+    secret_name: String,
+    #[serde(rename = "type")]
+    secret_type: String,
+    redacted: bool,
+    allow_plain_secrets: bool,
+}
+
+pub fn handle(tokens: &[String], cli: &Cli) -> Option<RosWireResult<String>> {
+    if tokens.is_empty() {
+        return None;
+    }
+
+    match tokens[0].as_str() {
+        "config" => Some(handle_config_tokens(tokens, cli)),
+        "secret" => Some(handle_secret_alias(tokens, cli)),
+        _ => None,
+    }
+}
+
+fn handle_config_tokens(tokens: &[String], cli: &Cli) -> RosWireResult<String> {
+    if tokens.len() < 2 {
+        return Err(Box::new(RosWireError::usage(
+            "config command requires a subcommand",
+        )));
+    }
+
+    match tokens[1].as_str() {
+        "init" => handle_config_init(),
+        "inspect" => handle_config_inspect(cli),
+        "profiles" => handle_config_profiles(),
+        "device" => handle_config_device(tokens),
+        "secret" => handle_config_secret(tokens),
+        _ => Err(Box::new(RosWireError::usage(format!(
+            "unsupported config subcommand: {}",
+            tokens[1],
+        )))),
+    }
+}
+
+fn handle_secret_alias(tokens: &[String], _cli: &Cli) -> RosWireResult<String> {
+    if tokens.get(1).map(String::as_str) != Some("set") {
+        return Err(Box::new(RosWireError::usage(
+            "secret command supports: secret set <profile> <name> type=<...>",
+        )));
+    }
+
+    if tokens.len() < 4 {
+        return Err(Box::new(RosWireError::usage(
+            "secret set requires: secret set <profile> <name> type=<...>",
+        )));
+    }
+
+    handle_secret_set_impl(&tokens[2], &tokens[3], &tokens[4..])
+}
+
+fn handle_config_init() -> RosWireResult<String> {
+    let env = read_env_map();
+    let paths = runtime_paths_from_env(&env);
+    let (created_home, created_config) = ensure_home_layout(&paths)?;
+
+    render_json(&ConfigInitPayload {
+        schema_version: "roswire.config.init.v1",
+        operation: "config.init",
+        created_home,
+        created_config,
+        paths: ConfigInspectPaths {
+            home: paths.home.display().to_string(),
+            config: paths.config.display().to_string(),
+            logs: paths.logs.display().to_string(),
+        },
+    })
+}
+
+fn handle_config_inspect(cli: &Cli) -> RosWireResult<String> {
+    let env = read_env_map();
+    let paths = runtime_paths_from_env(&env);
+
+    if !paths.config.exists() {
+        return Err(Box::new(RosWireError::config(
+            "config.toml not found; run `roswire config init --json` first",
+        )));
+    }
+
+    ensure_secure_directory_permissions(&paths.home)?;
+    ensure_secure_file_permissions(&paths.config)?;
+
+    let config = load_config_file(&paths.config)?;
+    let inspect = inspect_config(cli, &env, &config, &paths)?;
+    render_json(&inspect)
+}
+
+fn handle_config_profiles() -> RosWireResult<String> {
+    let env = read_env_map();
+    let paths = runtime_paths_from_env(&env);
+
+    if !paths.config.exists() {
+        return Err(Box::new(RosWireError::config(
+            "config.toml not found; run `roswire config init --json` first",
+        )));
+    }
+
+    let config = load_config_file(&paths.config)?;
+    let profiles = config.profiles.keys().cloned().collect::<Vec<_>>();
+
+    render_json(&ConfigProfilesPayload {
+        schema_version: "roswire.config.profiles.v1",
+        default_profile: config.default_profile,
+        profiles,
+    })
+}
+
+fn handle_config_device(tokens: &[String]) -> RosWireResult<String> {
+    if tokens.len() < 4 {
+        return Err(Box::new(RosWireError::usage(
+            "config device requires: config device <add|set> <profile> [key=value ...]",
+        )));
+    }
+
+    let operation = tokens[2].as_str();
+    let profile_name = tokens[3].clone();
+    let key_values = parse_key_value_tokens(&tokens[4..])?;
+
+    if operation != "add" && operation != "set" {
+        return Err(Box::new(RosWireError::usage(
+            "config device supports add|set",
+        )));
+    }
+
+    let env = read_env_map();
+    let paths = runtime_paths_from_env(&env);
+    let _ = ensure_home_layout(&paths)?;
+
+    let mut config = load_or_default_config(&paths.config)?;
+    let profile_exists = config.profiles.contains_key(&profile_name);
+
+    if operation == "add" && profile_exists {
+        return Err(Box::new(RosWireError::config(format!(
+            "profile already exists: {profile_name}",
+        ))));
+    }
+
+    let profile = config
+        .profiles
+        .entry(profile_name.clone())
+        .or_insert_with(ProfileConfig::default);
+
+    let mut updated_fields = Vec::new();
+    for (key, value) in key_values {
+        match key.as_str() {
+            "host" => {
+                profile.host = Some(value);
+                updated_fields.push("host".to_owned());
+            }
+            "user" => {
+                profile.user = Some(value);
+                updated_fields.push("user".to_owned());
+            }
+            "protocol" => {
+                profile.protocol = Some(normalize_protocol(&value)?);
+                updated_fields.push("protocol".to_owned());
+            }
+            "routeros_version" | "routeros-version" => {
+                profile.routeros_version = Some(normalize_routeros_version(&value)?);
+                updated_fields.push("routeros_version".to_owned());
+            }
+            "transfer" => {
+                profile.transfer = Some(normalize_transfer(&value)?);
+                updated_fields.push("transfer".to_owned());
+            }
+            "port" => {
+                profile.port = Some(parse_port(&value)?);
+                updated_fields.push("port".to_owned());
+            }
+            _ => {
+                return Err(Box::new(RosWireError::usage(format!(
+                    "unsupported device field: {key}",
+                ))));
+            }
+        }
+    }
+
+    if operation == "add" && (profile.host.is_none() || profile.user.is_none()) {
+        return Err(Box::new(RosWireError::usage(
+            "config device add requires host=<...> and user=<...>",
+        )));
+    }
+
+    if config.default_profile.is_none() {
+        config.default_profile = Some(profile_name.clone());
+    }
+
+    save_config_file(&paths.config, &config)?;
+
+    render_json(&ConfigDevicePayload {
+        schema_version: "roswire.config.device.v1",
+        operation: if operation == "add" {
+            "config.device.add"
+        } else {
+            "config.device.set"
+        },
+        profile: profile_name,
+        updated_fields,
+        default_profile: config.default_profile,
+    })
+}
+
+fn handle_config_secret(tokens: &[String]) -> RosWireResult<String> {
+    if tokens.get(2).map(String::as_str) != Some("set") {
+        return Err(Box::new(RosWireError::usage(
+            "config secret supports: config secret set <profile> <name> type=<...>",
+        )));
+    }
+
+    if tokens.len() < 5 {
+        return Err(Box::new(RosWireError::usage(
+            "config secret set requires: config secret set <profile> <name> type=<...>",
+        )));
+    }
+
+    handle_secret_set_impl(&tokens[3], &tokens[4], &tokens[5..])
+}
+
+fn handle_secret_set_impl(
+    profile_name: &str,
+    secret_name: &str,
+    key_value_tokens: &[String],
+) -> RosWireResult<String> {
+    let mut key_values = parse_key_value_tokens(key_value_tokens)?;
+    let secret_type = key_values
+        .remove("type")
+        .ok_or_else(|| Box::new(RosWireError::usage("secret set requires type=<...>")))?;
+
+    let env = read_env_map();
+    let paths = runtime_paths_from_env(&env);
+    let _ = ensure_home_layout(&paths)?;
+
+    let mut config = load_or_default_config(&paths.config)?;
+
+    if !config.profiles.contains_key(profile_name) {
+        return Err(Box::new(RosWireError::profile_not_found(profile_name)));
+    }
+
+    let (secret_spec, normalized_type, toggled_plain) = match secret_type.as_str() {
+        "plain" => {
+            let value = key_values.remove("value").ok_or_else(|| {
+                Box::new(RosWireError::usage("plain secret requires value=<...>"))
+            })?;
+            (SecretSpec::Plain { value }, "plain".to_owned(), true)
+        }
+        "encrypted" => {
+            let value = key_values.remove("value").ok_or_else(|| {
+                Box::new(RosWireError::usage("encrypted secret requires value=<...>"))
+            })?;
+            let key_id = key_values.remove("key_id");
+            (
+                SecretSpec::Encrypted { key_id, value },
+                "encrypted".to_owned(),
+                false,
+            )
+        }
+        "keychain" => {
+            let service = key_values.remove("service").ok_or_else(|| {
+                Box::new(RosWireError::usage(
+                    "keychain secret requires service=<...>",
+                ))
+            })?;
+            let account = key_values.remove("account").ok_or_else(|| {
+                Box::new(RosWireError::usage(
+                    "keychain secret requires account=<...>",
+                ))
+            })?;
+            (
+                SecretSpec::Keychain { service, account },
+                "keychain".to_owned(),
+                false,
+            )
+        }
+        "same-as" => {
+            let target = key_values.remove("target").ok_or_else(|| {
+                Box::new(RosWireError::usage("same-as secret requires target=<...>"))
+            })?;
+            (SecretSpec::SameAs { target }, "same-as".to_owned(), false)
+        }
+        _ => {
+            return Err(Box::new(RosWireError::usage(format!(
+                "unsupported secret type: {secret_type}",
+            ))));
+        }
+    };
+
+    if let Some(extra) = key_values.keys().next() {
+        return Err(Box::new(RosWireError::usage(format!(
+            "unexpected secret option: {extra}",
+        ))));
+    }
+
+    let allow_plain_secrets = {
+        let profile = config
+            .profiles
+            .get_mut(profile_name)
+            .ok_or_else(|| Box::new(RosWireError::profile_not_found(profile_name)))?;
+
+        if toggled_plain {
+            profile.allow_plain_secrets = true;
+        }
+
+        profile.secrets.insert(secret_name.to_owned(), secret_spec);
+        profile.allow_plain_secrets
+    };
+
+    save_config_file(&paths.config, &config)?;
+
+    render_json(&ConfigSecretPayload {
+        schema_version: "roswire.config.secret.v1",
+        operation: "config.secret.set",
+        profile: profile_name.to_owned(),
+        secret_name: secret_name.to_owned(),
+        secret_type: normalized_type,
+        redacted: true,
+        allow_plain_secrets,
+    })
+}
+
+fn runtime_paths_from_env(env: &BTreeMap<String, String>) -> ConfigPaths {
+    ConfigPaths::from_home(resolve_home_path(
+        env.get("ROSWIRE_HOME").map(String::as_str),
+    ))
+}
+
+fn read_env_map() -> BTreeMap<String, String> {
+    std::env::vars().collect()
+}
+
+fn parse_key_value_tokens(tokens: &[String]) -> RosWireResult<BTreeMap<String, String>> {
+    let mut key_values = BTreeMap::new();
+    for token in tokens {
+        let (key, value) = token.split_once('=').ok_or_else(|| {
+            Box::new(RosWireError::usage(format!(
+                "expected key=value token, got: {token}",
+            )))
+        })?;
+        if key.is_empty() {
+            return Err(Box::new(RosWireError::usage(
+                "key=value token cannot have empty key",
+            )));
+        }
+
+        key_values.insert(key.to_owned(), value.to_owned());
+    }
+
+    Ok(key_values)
+}
+
+fn normalize_protocol(value: &str) -> RosWireResult<String> {
+    match value {
+        "auto" | "api" | "api-ssl" | "rest" => Ok(value.to_owned()),
+        _ => Err(Box::new(RosWireError::usage(format!(
+            "invalid protocol value: {value}",
+        )))),
+    }
+}
+
+fn normalize_routeros_version(value: &str) -> RosWireResult<String> {
+    match value {
+        "auto" | "v6" | "v7" => Ok(value.to_owned()),
+        _ => Err(Box::new(RosWireError::usage(format!(
+            "invalid routeros_version value: {value}",
+        )))),
+    }
+}
+
+fn normalize_transfer(value: &str) -> RosWireResult<String> {
+    match value {
+        "ssh" => Ok(value.to_owned()),
+        _ => Err(Box::new(RosWireError::usage(format!(
+            "invalid transfer value: {value}",
+        )))),
+    }
+}
+
+fn parse_port(value: &str) -> RosWireResult<u16> {
+    value.parse::<u16>().map_err(|error| {
+        Box::new(RosWireError::usage(format!(
+            "invalid port value `{value}`: {error}",
+        )))
+    })
+}
+
+fn ensure_home_layout(paths: &ConfigPaths) -> RosWireResult<(bool, bool)> {
+    let created_home = !paths.home.exists();
+    let created_config = !paths.config.exists();
+
+    fs::create_dir_all(&paths.home).map_err(|error| {
+        Box::new(RosWireError::config(format!(
+            "failed to create roswire home: {error}",
+        )))
+    })?;
+    fs::create_dir_all(&paths.logs).map_err(|error| {
+        Box::new(RosWireError::config(format!(
+            "failed to create roswire logs directory: {error}",
+        )))
+    })?;
+
+    if created_config {
+        save_config_file(&paths.config, &ConfigFile::default())?;
+    }
+
+    #[cfg(unix)]
+    {
+        fs::set_permissions(&paths.home, fs::Permissions::from_mode(0o700)).map_err(|error| {
+            Box::new(RosWireError::config(format!(
+                "failed to set home permissions: {error}",
+            )))
+        })?;
+
+        if paths.config.exists() {
+            fs::set_permissions(&paths.config, fs::Permissions::from_mode(0o600)).map_err(
+                |error| {
+                    Box::new(RosWireError::config(format!(
+                        "failed to set config permissions: {error}",
+                    )))
+                },
+            )?;
+        }
+    }
+
+    Ok((created_home, created_config))
+}
+
+fn load_or_default_config(path: &Path) -> RosWireResult<ConfigFile> {
+    if path.exists() {
+        load_config_file(path)
+    } else {
+        Ok(ConfigFile::default())
+    }
+}
+
+fn save_config_file(path: &Path, config: &ConfigFile) -> RosWireResult<()> {
+    let serialized = toml::to_string_pretty(config).map_err(|error| {
+        Box::new(RosWireError::internal(format!(
+            "failed to serialize config.toml: {error}",
+        )))
+    })?;
+
+    fs::write(path, serialized).map_err(|error| {
+        Box::new(RosWireError::config(format!(
+            "failed to write config.toml: {error}",
+        )))
+    })?;
+
+    #[cfg(unix)]
+    {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(|error| {
+            Box::new(RosWireError::config(format!(
+                "failed to set config permissions: {error}",
+            )))
+        })?;
+    }
+
+    Ok(())
+}
+
+fn render_json<T: Serialize>(value: &T) -> RosWireResult<String> {
+    serde_json::to_string(value).map_err(|error| {
+        Box::new(RosWireError::internal(format!(
+            "failed to serialize config payload: {error}",
+        )))
+    })
 }
 
 #[cfg(test)]

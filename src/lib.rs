@@ -21,6 +21,12 @@ pub fn run() -> RosWireResult<()> {
         ));
     }
 
+    if let Some(result) = config::handle(&cli.tokens, &cli) {
+        let payload = result?;
+        println!("{payload}");
+        return Ok(());
+    }
+
     if let Some(result) = introspect::handle(&cli.tokens, cli.remote) {
         let payload = result?;
         println!("{payload}");
