@@ -18,6 +18,9 @@ pub enum ErrorCode {
     AuthFailed,
     NetworkError,
     RosApiFailure,
+    SecretBackendUnavailable,
+    SecretNotFound,
+    SecretDecryptFailed,
     InternalError,
 }
 
@@ -115,6 +118,40 @@ impl RosWireError {
             hint: None,
             context: ErrorContext::default(),
             exit_code: 1,
+        }
+    }
+
+    pub fn secret_backend_unavailable(message: impl Into<String>) -> Self {
+        Self {
+            error_code: ErrorCode::SecretBackendUnavailable,
+            message: message.into(),
+            hint: Some(
+                "check keychain access or encrypted secret master key configuration".to_owned(),
+            ),
+            context: ErrorContext::default(),
+            exit_code: 4,
+        }
+    }
+
+    pub fn secret_not_found(message: impl Into<String>) -> Self {
+        Self {
+            error_code: ErrorCode::SecretNotFound,
+            message: message.into(),
+            hint: Some(
+                "run `roswire secret set ...` or update the referenced secret backend".to_owned(),
+            ),
+            context: ErrorContext::default(),
+            exit_code: 2,
+        }
+    }
+
+    pub fn secret_decrypt_failed(message: impl Into<String>) -> Self {
+        Self {
+            error_code: ErrorCode::SecretDecryptFailed,
+            message: message.into(),
+            hint: Some("verify the encrypted secret master key and stored ciphertext".to_owned()),
+            context: ErrorContext::default(),
+            exit_code: 3,
         }
     }
 
@@ -364,6 +401,18 @@ mod tests {
         let api = RosWireError::ros_api_failure("trap");
         assert_eq!(api.error_code, ErrorCode::RosApiFailure);
         assert_eq!(api.exit_code(), 1);
+
+        let backend = RosWireError::secret_backend_unavailable("keychain unavailable");
+        assert_eq!(backend.error_code, ErrorCode::SecretBackendUnavailable);
+        assert_eq!(backend.exit_code(), 4);
+
+        let missing = RosWireError::secret_not_found("secret missing");
+        assert_eq!(missing.error_code, ErrorCode::SecretNotFound);
+        assert_eq!(missing.exit_code(), 2);
+
+        let decrypt = RosWireError::secret_decrypt_failed("decrypt failed");
+        assert_eq!(decrypt.error_code, ErrorCode::SecretDecryptFailed);
+        assert_eq!(decrypt.exit_code(), 3);
     }
 
     #[test]

@@ -170,20 +170,26 @@ fn resolve_execution_target_with_env(
                 "missing RouterOS user; set --user, ROS_USER, or profile user",
             ))
         })?;
-    let profile_password = match profile {
-        Some(profile) => resolve_profile_password(profile)?,
-        None => None,
-    };
-    let password = cli
+    let password = match cli
         .password
         .clone()
         .or_else(|| env.get("ROS_PASSWORD").cloned())
-        .or(profile_password)
-        .ok_or_else(|| {
-            Box::new(error::RosWireError::config(
-                "missing RouterOS password; set --password, ROS_PASSWORD, or profile secret password",
-            ))
-        })?;
+    {
+        Some(password) => password,
+        None => match profile {
+            Some(profile) => config::resolve_profile_secret_value(profile, "password", env)?
+                .ok_or_else(|| {
+                    Box::new(error::RosWireError::config(
+                        "missing RouterOS password; set --password, ROS_PASSWORD, or profile secret password",
+                    ))
+                })?,
+            None => {
+                return Err(Box::new(error::RosWireError::config(
+                    "missing RouterOS password; set --password, ROS_PASSWORD, or profile secret password",
+                )));
+            }
+        },
+    };
 
     let requested_protocol = cli
         .protocol
@@ -225,52 +231,6 @@ fn resolve_execution_target_with_env(
         routeros_version,
         port,
     })
-}
-
-fn resolve_profile_password(profile: &config::ProfileConfig) -> RosWireResult<Option<String>> {
-    resolve_secret_value(profile, "password", &mut Vec::new())
-}
-
-fn resolve_secret_value(
-    profile: &config::ProfileConfig,
-    name: &str,
-    visiting: &mut Vec<String>,
-) -> RosWireResult<Option<String>> {
-    let Some(secret) = profile.secrets.get(name) else {
-        return Ok(None);
-    };
-
-    if visiting.iter().any(|item| item == name) {
-        return Err(Box::new(error::RosWireError::config(
-            "secret same-as cycle detected",
-        )));
-    }
-
-    visiting.push(name.to_owned());
-    let value = match secret {
-        config::SecretSpec::Plain { value } => {
-            if !profile.allow_plain_secrets {
-                return Err(Box::new(error::RosWireError::config(
-                    "plain secrets require allow_plain_secrets = true",
-                )));
-            }
-            Some(value.clone())
-        }
-        config::SecretSpec::SameAs { target } => resolve_secret_value(profile, target, visiting)?,
-        config::SecretSpec::Encrypted { .. } => {
-            return Err(Box::new(error::RosWireError::config(
-                "encrypted secret backend is not implemented yet",
-            )));
-        }
-        config::SecretSpec::Keychain { .. } => {
-            return Err(Box::new(error::RosWireError::config(
-                "keychain secret backend is not implemented yet",
-            )));
-        }
-    };
-    visiting.pop();
-
-    Ok(value)
 }
 
 fn validate_protocol(value: &str) -> RosWireResult<()> {
@@ -509,7 +469,7 @@ target = "actual"
     }
 
     #[test]
-    fn execution_target_reports_secret_backend_gaps() {
+    fn execution_target_reports_missing_env_secret() {
         let (temp, env) = temp_home_env();
         write_config(
             temp.path(),
@@ -522,18 +482,44 @@ host = "198.51.100.10"
 user = "profile-user"
 
 [profiles.studio.secrets.password]
-type = "keychain"
-service = "roswire"
-account = "profiles/studio/password"
+type = "env"
+var = "ROSWIRE_TEST_PASSWORD"
 "#,
         );
         let cli = Cli::try_parse_from(["roswire", "interface", "print"]).expect("cli should parse");
 
-        let error =
-            resolve_execution_target_with_env(&cli, &env).expect_err("keychain should fail");
+        let error = resolve_execution_target_with_env(&cli, &env)
+            .expect_err("missing env secret should fail");
 
-        assert_eq!(error.error_code, ErrorCode::ConfigError);
-        assert!(error.message.contains("keychain secret backend"));
+        assert_eq!(error.error_code, ErrorCode::SecretNotFound);
+        assert!(error.message.contains("ROSWIRE_TEST_PASSWORD"));
+    }
+
+    #[test]
+    fn execution_target_reports_missing_encrypted_master_key() {
+        let (temp, env) = temp_home_env();
+        write_config(
+            temp.path(),
+            r#"
+version = 1
+default_profile = "studio"
+
+[profiles.studio]
+host = "198.51.100.10"
+user = "profile-user"
+
+[profiles.studio.secrets.password]
+type = "encrypted"
+value = "v1:nonce:ciphertext"
+"#,
+        );
+        let cli = Cli::try_parse_from(["roswire", "interface", "print"]).expect("cli should parse");
+
+        let error = resolve_execution_target_with_env(&cli, &env)
+            .expect_err("missing master key should fail");
+
+        assert_eq!(error.error_code, ErrorCode::SecretBackendUnavailable);
+        assert!(error.message.contains("ROSWIRE_MASTER_KEY"));
     }
 
     #[test]

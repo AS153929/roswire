@@ -19,6 +19,10 @@ thiserror = "1"
 toml = "0.8"
 directories = "6"
 md-5 = "0.10"
+aes-gcm = "0.10"
+keyring = "2"
+rand = "0.8"
+sha2 = "0.10"
 ureq = { version = "2", default-features = false, features = ["tls"] }
 
 [dev-dependencies]
