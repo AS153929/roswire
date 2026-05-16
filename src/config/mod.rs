@@ -31,6 +31,29 @@ pub struct ProfileConfig {
     pub routeros_version: Option<String>,
     pub transfer: Option<String>,
     pub port: Option<u16>,
+    #[serde(default)]
+    pub allow_plain_secrets: bool,
+    #[serde(default)]
+    pub secrets: BTreeMap<String, SecretSpec>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum SecretSpec {
+    Plain {
+        value: String,
+    },
+    Encrypted {
+        key_id: Option<String>,
+        value: String,
+    },
+    Keychain {
+        service: String,
+        account: String,
+    },
+    SameAs {
+        target: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,7 +101,17 @@ pub struct ConfigInspect {
     pub active_profile: String,
     pub paths: ConfigInspectPaths,
     pub resolved: BTreeMap<String, ResolvedField>,
+    pub secrets: BTreeMap<String, SecretInspectField>,
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct SecretInspectField {
+    pub status: String,
+    #[serde(rename = "type")]
+    pub secret_type: String,
+    pub source: ValueSource,
+    pub redacted: bool,
 }
 
 pub fn default_roswire_home() -> PathBuf {
@@ -173,6 +206,80 @@ pub fn ensure_secure_file_permissions(path: &Path) -> RosWireResult<()> {
     Ok(())
 }
 
+pub fn resolve_profile_secrets(
+    profile: &ProfileConfig,
+) -> RosWireResult<BTreeMap<String, SecretInspectField>> {
+    let mut resolved = BTreeMap::new();
+    let mut visiting = Vec::new();
+
+    for name in profile.secrets.keys() {
+        let field = resolve_secret_recursive(name, profile, &mut resolved, &mut visiting)?;
+        resolved.insert(name.clone(), field);
+    }
+
+    Ok(resolved)
+}
+
+fn resolve_secret_recursive(
+    name: &str,
+    profile: &ProfileConfig,
+    resolved: &mut BTreeMap<String, SecretInspectField>,
+    visiting: &mut Vec<String>,
+) -> RosWireResult<SecretInspectField> {
+    if let Some(field) = resolved.get(name) {
+        return Ok(field.clone());
+    }
+
+    if visiting.iter().any(|item| item == name) {
+        return Err(Box::new(RosWireError::config(
+            "secret same-as cycle detected",
+        )));
+    }
+
+    let spec = profile.secrets.get(name).ok_or_else(|| {
+        Box::new(RosWireError::config(format!(
+            "secret target missing: {name}",
+        )))
+    })?;
+
+    visiting.push(name.to_owned());
+    let field = match spec {
+        SecretSpec::Plain { .. } => {
+            if !profile.allow_plain_secrets {
+                return Err(Box::new(RosWireError::config(
+                    "plain secrets require allow_plain_secrets = true",
+                )));
+            }
+
+            SecretInspectField {
+                status: "available".to_owned(),
+                secret_type: "plain".to_owned(),
+                source: ValueSource::Profile,
+                redacted: true,
+            }
+        }
+        SecretSpec::Encrypted { .. } => SecretInspectField {
+            status: "available".to_owned(),
+            secret_type: "encrypted".to_owned(),
+            source: ValueSource::Profile,
+            redacted: true,
+        },
+        SecretSpec::Keychain { .. } => SecretInspectField {
+            status: "available".to_owned(),
+            secret_type: "keychain".to_owned(),
+            source: ValueSource::Profile,
+            redacted: true,
+        },
+        SecretSpec::SameAs { target } => {
+            resolve_secret_recursive(target, profile, resolved, visiting)?
+        }
+    };
+    visiting.pop();
+
+    resolved.insert(name.to_owned(), field.clone());
+    Ok(field)
+}
+
 pub fn inspect_config(
     cli: &Cli,
     env: &BTreeMap<String, String>,
@@ -188,6 +295,7 @@ pub fn inspect_config(
         .profiles
         .get(&active_profile)
         .ok_or_else(|| Box::new(RosWireError::profile_not_found(active_profile.clone())))?;
+    let secrets = resolve_profile_secrets(profile)?;
 
     let mut resolved = BTreeMap::new();
     insert_resolved_field(
@@ -251,6 +359,7 @@ pub fn inspect_config(
             logs: paths.logs.display().to_string(),
         },
         resolved,
+        secrets,
         warnings: Vec::new(),
     })
 }
@@ -353,6 +462,7 @@ mod tests {
                     routeros_version: Some("v7".to_owned()),
                     transfer: Some("ssh".to_owned()),
                     port: Some(8728),
+                    ..ProfileConfig::default()
                 },
             )]),
         };
@@ -394,6 +504,125 @@ mod tests {
                 value: "v7".to_owned(),
                 source: ValueSource::Profile,
             })
+        );
+    }
+
+    #[test]
+    fn plain_secret_requires_explicit_allow_flag() {
+        let profile = ProfileConfig {
+            allow_plain_secrets: false,
+            secrets: BTreeMap::from([(
+                "password".to_owned(),
+                SecretSpec::Plain {
+                    value: "super-secret".to_owned(),
+                },
+            )]),
+            ..ProfileConfig::default()
+        };
+
+        let error = resolve_profile_secrets(&profile).expect_err("plain secret should be blocked");
+        assert!(has_error_code(&error, ErrorCode::ConfigError));
+    }
+
+    #[test]
+    fn same_as_secret_detects_cycle() {
+        let profile = ProfileConfig {
+            allow_plain_secrets: true,
+            secrets: BTreeMap::from([
+                (
+                    "password".to_owned(),
+                    SecretSpec::SameAs {
+                        target: "ssh_password".to_owned(),
+                    },
+                ),
+                (
+                    "ssh_password".to_owned(),
+                    SecretSpec::SameAs {
+                        target: "password".to_owned(),
+                    },
+                ),
+            ]),
+            ..ProfileConfig::default()
+        };
+
+        let error = resolve_profile_secrets(&profile).expect_err("cycle should fail");
+        assert!(has_error_code(&error, ErrorCode::ConfigError));
+    }
+
+    #[test]
+    fn same_as_secret_resolves_without_exposing_plain_value() {
+        let profile = ProfileConfig {
+            allow_plain_secrets: true,
+            secrets: BTreeMap::from([
+                (
+                    "password".to_owned(),
+                    SecretSpec::Plain {
+                        value: "super-secret".to_owned(),
+                    },
+                ),
+                (
+                    "ssh_password".to_owned(),
+                    SecretSpec::SameAs {
+                        target: "password".to_owned(),
+                    },
+                ),
+            ]),
+            ..ProfileConfig::default()
+        };
+
+        let resolved = resolve_profile_secrets(&profile).expect("secrets should resolve");
+        assert_eq!(
+            resolved
+                .get("password")
+                .map(|field| field.secret_type.as_str()),
+            Some("plain")
+        );
+        assert_eq!(
+            resolved
+                .get("ssh_password")
+                .map(|field| field.secret_type.as_str()),
+            Some("plain")
+        );
+        assert_eq!(
+            resolved.get("password").map(|field| field.redacted),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn inspect_output_never_contains_secret_values() {
+        let cli = Cli::try_parse_from(["roswire", "interface", "print"]).expect("cli should parse");
+        let config = ConfigFile {
+            version: 1,
+            default_profile: Some("home".to_owned()),
+            profiles: BTreeMap::from([(
+                "home".to_owned(),
+                ProfileConfig {
+                    allow_plain_secrets: true,
+                    secrets: BTreeMap::from([(
+                        "password".to_owned(),
+                        SecretSpec::Plain {
+                            value: "super-secret".to_owned(),
+                        },
+                    )]),
+                    ..ProfileConfig::default()
+                },
+            )]),
+        };
+
+        let inspect = inspect_config(
+            &cli,
+            &BTreeMap::new(),
+            &config,
+            &ConfigPaths::from_home(PathBuf::from("/tmp/roswire")),
+        )
+        .expect("inspect should succeed");
+
+        let payload = serde_json::to_string(&inspect).expect("inspect payload should serialize");
+        assert!(!payload.contains("super-secret"));
+        assert_eq!(
+            inspect.secrets.get("password").map(|field| field.redacted),
+            Some(true)
         );
     }
 
