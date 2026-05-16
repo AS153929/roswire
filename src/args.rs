@@ -102,6 +102,10 @@ pub struct Cli {
     #[arg(long)]
     pub remote: bool,
 
+    /// Include read-only remote RouterOS diagnostics for doctor.
+    #[arg(long = "include-remote")]
+    pub include_remote: bool,
+
     /// Internal test hook to exercise structured error output paths.
     #[arg(long, hide = true)]
     pub simulate_error: bool,
@@ -215,5 +219,6 @@ mod tests {
 
         assert_eq!(cli.protocol, Some(ProtocolMode::Rest));
         assert!(!cli.remote);
+        assert!(!cli.include_remote);
     }
 }

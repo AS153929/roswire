@@ -1,8 +1,10 @@
+use crate::args::Cli;
 use crate::error::{RosWireError, RosWireResult};
 use serde::Serialize;
 
 pub mod cache;
 pub mod discovery;
+pub mod doctor;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ArgumentSpec {
@@ -69,14 +71,14 @@ struct ExplainErrorPayload {
     suggested_next_steps: Vec<String>,
 }
 
-pub fn handle(tokens: &[String], remote: bool) -> Option<RosWireResult<String>> {
+pub fn handle(tokens: &[String], cli: &Cli) -> Option<RosWireResult<String>> {
     if tokens.is_empty() {
         return None;
     }
 
     let command = tokens[0].as_str();
 
-    if remote
+    if cli.remote
         && (command == "commands"
             || (command == "schema"
                 && matches!(
@@ -89,6 +91,7 @@ pub fn handle(tokens: &[String], remote: bool) -> Option<RosWireResult<String>> 
 
     match command {
         "commands" => Some(render_json(&commands_payload())),
+        "doctor" => Some(doctor::doctor_payload(cli)),
         "help" => Some(help_payload(tokens)),
         "schema" => Some(schema_payload(tokens)),
         "explain-error" => Some(explain_error_payload(tokens)),
@@ -127,6 +130,7 @@ fn help_payload(tokens: &[String]) -> RosWireResult<String> {
                 "--port".to_owned(),
                 "--json".to_owned(),
                 "--debug".to_owned(),
+                "--include-remote".to_owned(),
             ],
             commands: commands_payload().commands,
         };
@@ -469,6 +473,32 @@ fn catalog() -> Vec<CommandDefinition> {
                 "USAGE_ERROR".to_owned(),
                 "PROFILE_NOT_FOUND".to_owned(),
                 "CONFIG_ERROR".to_owned(),
+            ],
+        },
+        CommandDefinition {
+            name: "doctor".to_owned(),
+            summary: "Run local diagnostics and optionally include read-only remote checks."
+                .to_owned(),
+            kind: "introspection".to_owned(),
+            syntax: "roswire doctor [--include-remote] --json".to_owned(),
+            arguments: vec![ArgumentSpec {
+                name: "--include-remote".to_owned(),
+                style: "flag".to_owned(),
+                required: false,
+                arg_type: "bool".to_owned(),
+                description: "Include read-only RouterOS port/login/resource diagnostics."
+                    .to_owned(),
+                example: Some("--include-remote".to_owned()),
+            }],
+            examples: vec![
+                "roswire doctor --json".to_owned(),
+                "roswire --profile studio-router doctor --include-remote --json".to_owned(),
+            ],
+            errors: vec![
+                "CONFIG_ERROR".to_owned(),
+                "AUTH_FAILED".to_owned(),
+                "NETWORK_ERROR".to_owned(),
+                "ROS_API_FAILURE".to_owned(),
             ],
         },
         CommandDefinition {

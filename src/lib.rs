@@ -31,7 +31,7 @@ pub fn run() -> RosWireResult<()> {
         return Ok(());
     }
 
-    if let Some(result) = introspect::handle(&cli.tokens, cli.remote) {
+    if let Some(result) = introspect::handle(&cli.tokens, &cli) {
         let payload = result?;
         println!("{payload}");
         return Ok(());
@@ -86,16 +86,16 @@ pub fn run() -> RosWireResult<()> {
 }
 
 #[derive(Debug, Clone)]
-struct ExecutionTarget {
-    host: String,
-    user: String,
-    password: String,
-    requested_protocol: String,
-    routeros_version: String,
-    port: u16,
+pub(crate) struct ExecutionTarget {
+    pub(crate) host: String,
+    pub(crate) user: String,
+    pub(crate) password: String,
+    pub(crate) requested_protocol: String,
+    pub(crate) routeros_version: String,
+    pub(crate) port: u16,
 }
 
-fn resolve_execution_target(cli: &Cli) -> RosWireResult<ExecutionTarget> {
+pub(crate) fn resolve_execution_target(cli: &Cli) -> RosWireResult<ExecutionTarget> {
     let env = read_env_map();
     resolve_execution_target_with_env(cli, &env)
 }
