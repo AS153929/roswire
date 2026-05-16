@@ -1,3 +1,7 @@
+use crate::args::ParsedInvocation;
+use crate::error::{redact_resolved_args, ErrorContext, RosWireError, RosWireResult};
+use std::collections::BTreeMap;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MappingRequest {
     pub tokens: Vec<String>,
@@ -9,13 +13,353 @@ impl MappingRequest {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActionKind {
+    Print,
+    Add,
+    Set,
+    Remove,
+}
+
+impl ActionKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Print => "print",
+            Self::Add => "add",
+            Self::Set => "set",
+            Self::Remove => "remove",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RestMethod {
+    Get,
+    Put,
+    Patch,
+    Delete,
+}
+
+impl RestMethod {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Get => "GET",
+            Self::Put => "PUT",
+            Self::Patch => "PATCH",
+            Self::Delete => "DELETE",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestMapping {
+    pub method: RestMethod,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandMapping {
+    pub cli_path: Vec<String>,
+    pub action_kind: ActionKind,
+    pub routeros_path: String,
+    pub side_effects: Vec<String>,
+    pub idempotency: String,
+    pub rest_mapping: Option<RestMapping>,
+}
+
+impl CommandMapping {
+    pub fn has_rest_mapping(&self) -> bool {
+        self.rest_mapping.is_some()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProtocolRequest {
+    pub mapping: CommandMapping,
+    pub resolved_args: BTreeMap<String, String>,
+}
+
+impl ProtocolRequest {
+    pub fn classic_api_words(&self) -> Vec<String> {
+        let mut words = Vec::with_capacity(1 + self.resolved_args.len());
+        words.push(self.mapping.routeros_path.clone());
+        words.extend(
+            self.resolved_args
+                .iter()
+                .map(|(key, value)| format!("={key}={value}")),
+        );
+        words
+    }
+}
+
+pub fn build_protocol_request(invocation: &ParsedInvocation) -> RosWireResult<ProtocolRequest> {
+    Ok(ProtocolRequest {
+        mapping: resolve_mapping(invocation)?,
+        resolved_args: invocation.resolved_args.clone(),
+    })
+}
+
+pub fn resolve_mapping(invocation: &ParsedInvocation) -> RosWireResult<CommandMapping> {
+    let path = invocation
+        .path
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let action = invocation.action.as_str();
+
+    match (path.as_slice(), action) {
+        (["interface"], "print") => Ok(print_mapping(
+            &["interface"],
+            "/interface/print",
+            Some(RestMapping {
+                method: RestMethod::Get,
+                path: "/rest/interface".to_owned(),
+            }),
+        )),
+        (["ip", "address"], "print") => Ok(print_mapping(
+            &["ip", "address"],
+            "/ip/address/print",
+            Some(RestMapping {
+                method: RestMethod::Get,
+                path: "/rest/ip/address".to_owned(),
+            }),
+        )),
+        (["ip", "address"], "add") => Ok(write_mapping(
+            &["ip", "address"],
+            ActionKind::Add,
+            "/ip/address/add",
+            "creates-routeros-record",
+            "not-idempotent",
+            Some(RestMapping {
+                method: RestMethod::Put,
+                path: "/rest/ip/address".to_owned(),
+            }),
+        )),
+        (["ip", "address"], "set") => Ok(write_mapping(
+            &["ip", "address"],
+            ActionKind::Set,
+            "/ip/address/set",
+            "updates-routeros-record",
+            "idempotent",
+            Some(RestMapping {
+                method: RestMethod::Patch,
+                path: "/rest/ip/address/{.id}".to_owned(),
+            }),
+        )),
+        (["ip", "address"], "remove") => Ok(write_mapping(
+            &["ip", "address"],
+            ActionKind::Remove,
+            "/ip/address/remove",
+            "deletes-routeros-record",
+            "not-idempotent",
+            Some(RestMapping {
+                method: RestMethod::Delete,
+                path: "/rest/ip/address/{.id}".to_owned(),
+            }),
+        )),
+        (["system", "resource"], "print") => Ok(print_mapping(
+            &["system", "resource"],
+            "/system/resource/print",
+            Some(RestMapping {
+                method: RestMethod::Get,
+                path: "/rest/system/resource".to_owned(),
+            }),
+        )),
+        _ => Err(Box::new(
+            RosWireError::unsupported_action(format!(
+                "unsupported RouterOS action: {}",
+                command_name(invocation),
+            ))
+            .with_context(mapping_error_context(invocation)),
+        )),
+    }
+}
+
+pub fn command_name(invocation: &ParsedInvocation) -> String {
+    invocation
+        .path
+        .iter()
+        .chain(std::iter::once(&invocation.action))
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn print_mapping(
+    cli_path: &[&str],
+    routeros_path: &str,
+    rest_mapping: Option<RestMapping>,
+) -> CommandMapping {
+    CommandMapping {
+        cli_path: cli_path.iter().map(|item| (*item).to_owned()).collect(),
+        action_kind: ActionKind::Print,
+        routeros_path: routeros_path.to_owned(),
+        side_effects: Vec::new(),
+        idempotency: "read-only".to_owned(),
+        rest_mapping,
+    }
+}
+
+fn write_mapping(
+    cli_path: &[&str],
+    action_kind: ActionKind,
+    routeros_path: &str,
+    side_effect: &str,
+    idempotency: &str,
+    rest_mapping: Option<RestMapping>,
+) -> CommandMapping {
+    CommandMapping {
+        cli_path: cli_path.iter().map(|item| (*item).to_owned()).collect(),
+        action_kind,
+        routeros_path: routeros_path.to_owned(),
+        side_effects: vec![side_effect.to_owned()],
+        idempotency: idempotency.to_owned(),
+        rest_mapping,
+    }
+}
+
+fn mapping_error_context(invocation: &ParsedInvocation) -> ErrorContext {
+    ErrorContext {
+        command: command_name(invocation),
+        path: invocation.path.clone(),
+        action: invocation.action.clone(),
+        resolved_args: redact_resolved_args(&invocation.resolved_args),
+        ..ErrorContext::default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::MappingRequest;
+    use super::{build_protocol_request, resolve_mapping, ActionKind, MappingRequest, RestMethod};
+    use crate::args::ParsedInvocation;
+    use crate::error::ErrorCode;
+    use std::collections::BTreeMap;
 
     #[test]
     fn new_keeps_all_tokens() {
         let request = MappingRequest::new(vec!["ip".into(), "address".into(), "print".into()]);
         assert_eq!(request.tokens, vec!["ip", "address", "print"]);
+    }
+
+    #[test]
+    fn maps_ip_address_print_to_classic_api_path() {
+        let invocation = invocation(&["ip", "address"], "print", &[]);
+
+        let mapping = resolve_mapping(&invocation).expect("mapping should resolve");
+
+        assert_eq!(mapping.action_kind, ActionKind::Print);
+        assert_eq!(mapping.action_kind.as_str(), "print");
+        assert_eq!(mapping.routeros_path, "/ip/address/print");
+        assert!(mapping.side_effects.is_empty());
+        assert_eq!(mapping.idempotency, "read-only");
+        assert!(mapping.has_rest_mapping());
+        assert_eq!(
+            mapping
+                .rest_mapping
+                .as_ref()
+                .map(|rest| rest.method.as_str()),
+            Some("GET"),
+        );
+    }
+
+    #[test]
+    fn builds_stable_protocol_request_for_ip_address_add() {
+        let invocation = invocation(
+            &["ip", "address"],
+            "add",
+            &[("interface", "ether1"), ("address", "192.168.88.2/24")],
+        );
+
+        let request = build_protocol_request(&invocation).expect("request should build");
+
+        assert_eq!(request.mapping.action_kind, ActionKind::Add);
+        assert_eq!(request.mapping.routeros_path, "/ip/address/add");
+        assert_eq!(
+            request.mapping.side_effects,
+            vec!["creates-routeros-record".to_owned()],
+        );
+        assert_eq!(request.mapping.idempotency, "not-idempotent");
+        assert_eq!(
+            request
+                .mapping
+                .rest_mapping
+                .as_ref()
+                .map(|rest| rest.method),
+            Some(RestMethod::Put),
+        );
+        assert_eq!(
+            request.classic_api_words(),
+            vec![
+                "/ip/address/add".to_owned(),
+                "=address=192.168.88.2/24".to_owned(),
+                "=interface=ether1".to_owned(),
+            ],
+        );
+    }
+
+    #[test]
+    fn maps_ip_address_set_and_remove_side_effects() {
+        let set = resolve_mapping(&invocation(&["ip", "address"], "set", &[]))
+            .expect("set mapping should resolve");
+        assert_eq!(set.action_kind, ActionKind::Set);
+        assert_eq!(set.routeros_path, "/ip/address/set");
+        assert_eq!(set.side_effects, vec!["updates-routeros-record".to_owned()]);
+        assert_eq!(set.idempotency, "idempotent");
+
+        let remove = resolve_mapping(&invocation(&["ip", "address"], "remove", &[]))
+            .expect("remove mapping should resolve");
+        assert_eq!(remove.action_kind, ActionKind::Remove);
+        assert_eq!(remove.routeros_path, "/ip/address/remove");
+        assert_eq!(
+            remove.side_effects,
+            vec!["deletes-routeros-record".to_owned()],
+        );
+        assert_eq!(remove.idempotency, "not-idempotent");
+    }
+
+    #[test]
+    fn maps_interface_and_system_resource_print() {
+        let interface = resolve_mapping(&invocation(&["interface"], "print", &[]))
+            .expect("interface print should resolve");
+        assert_eq!(interface.routeros_path, "/interface/print");
+
+        let resource = resolve_mapping(&invocation(&["system", "resource"], "print", &[]))
+            .expect("system resource print should resolve");
+        assert_eq!(resource.routeros_path, "/system/resource/print");
+    }
+
+    #[test]
+    fn unknown_mapping_returns_unsupported_action_with_redacted_args() {
+        let invocation = invocation(
+            &["ip", "address"],
+            "enable",
+            &[("password", "super-secret")],
+        );
+
+        let error = resolve_mapping(&invocation).expect_err("unknown action should fail");
+
+        assert_eq!(error.error_code, ErrorCode::UnsupportedAction);
+        assert_eq!(error.context.command, "ip/address/enable");
+        assert_eq!(error.context.path, vec!["ip", "address"]);
+        assert_eq!(error.context.action, "enable");
+        assert_eq!(
+            error
+                .context
+                .resolved_args
+                .get("password")
+                .map(String::as_str),
+            Some("***REDACTED***"),
+        );
+    }
+
+    fn invocation(path: &[&str], action: &str, args: &[(&str, &str)]) -> ParsedInvocation {
+        ParsedInvocation {
+            path: path.iter().map(|item| (*item).to_owned()).collect(),
+            action: action.to_owned(),
+            resolved_args: args
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+                .collect::<BTreeMap<_, _>>(),
+        }
     }
 }
