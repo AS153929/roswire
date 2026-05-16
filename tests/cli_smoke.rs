@@ -1,0 +1,26 @@
+use assert_cmd::Command;
+use predicates::prelude::*;
+
+#[test]
+fn binary_supports_version_flag() {
+    let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
+    cmd.arg("--version")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("roswire"));
+}
+
+#[test]
+fn binary_supports_help_flag() {
+    let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
+    cmd.arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Usage:"));
+}
+
+#[test]
+fn binary_runs_without_arguments() {
+    let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
+    cmd.assert().success().stdout(predicate::str::is_empty());
+}
