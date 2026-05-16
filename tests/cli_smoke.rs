@@ -20,9 +20,12 @@ fn binary_supports_help_flag() {
 }
 
 #[test]
-fn binary_runs_without_arguments() {
+fn binary_without_arguments_returns_structured_usage_error() {
     let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
-    cmd.assert().success().stdout(predicate::str::is_empty());
+    cmd.assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("\"error_code\":\"USAGE_ERROR\""));
 }
 
 #[test]

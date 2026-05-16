@@ -21,5 +21,7 @@ pub fn run() -> RosWireResult<()> {
         ));
     }
 
+    let _invocation = args::parse_invocation(&cli.tokens)?;
+
     Ok(())
 }
