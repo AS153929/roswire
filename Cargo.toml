@@ -17,6 +17,7 @@ serde_json = "1"
 thiserror = "1"
 toml = "0.8"
 directories = "6"
+md-5 = "0.10"
 
 [dev-dependencies]
 assert_cmd = "2"
