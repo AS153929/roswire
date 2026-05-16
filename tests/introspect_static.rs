@@ -75,3 +75,27 @@ fn explain_error_returns_machine_readable_details() {
             "\"error_code\":\"ROS_API_FAILURE\"",
         ));
 }
+
+#[test]
+fn commands_remote_branch_reports_remote_schema_unavailable() {
+    let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
+    cmd.args(["commands", "--remote", "--json"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains(
+            "\"error_code\":\"REMOTE_SCHEMA_UNAVAILABLE\"",
+        ));
+}
+
+#[test]
+fn schema_discover_remote_branch_reports_remote_schema_unavailable() {
+    let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
+    cmd.args(["schema", "discover", "--remote", "--json"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains(
+            "\"error_code\":\"REMOTE_SCHEMA_UNAVAILABLE\"",
+        ));
+}
