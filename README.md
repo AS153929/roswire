@@ -25,8 +25,10 @@
 未来版本发布的安装形式预计如下：
 
 ```bash
-curl -L https://github.com/AS153929/roswire/releases/latest/download/roswire-linux-amd64 -o /usr/local/bin/roswire
-chmod +x /usr/local/bin/roswire
+curl -L https://github.com/AS153929/roswire/releases/latest/download/roswire-linux-amd64.tar.gz -o /tmp/roswire-linux-amd64.tar.gz
+curl -L https://github.com/AS153929/roswire/releases/latest/download/checksums.txt -o /tmp/roswire-checksums.txt
+cd /tmp && sha256sum -c --ignore-missing roswire-checksums.txt
+tar -xzf /tmp/roswire-linux-amd64.tar.gz -C /usr/local/bin roswire
 ```
 
 在正式发布前，本仓库文档就是当前设计事实来源。
