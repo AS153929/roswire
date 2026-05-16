@@ -9,6 +9,7 @@ pub enum ErrorCode {
     ConfigError,
     ProfileNotFound,
     ConfigInsecurePermissions,
+    UnsupportedAction,
     HelpTopicNotFound,
     SchemaUnavailable,
     RemoteSchemaUnavailable,
@@ -23,6 +24,10 @@ pub enum ErrorCode {
 #[derive(Debug, Clone, Serialize)]
 pub struct ErrorContext {
     pub command: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub path: Vec<String>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub action: String,
     pub requested_protocol: String,
     pub selected_protocol: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -36,6 +41,8 @@ impl Default for ErrorContext {
     fn default() -> Self {
         Self {
             command: String::new(),
+            path: Vec::new(),
+            action: String::new(),
             requested_protocol: "unknown".to_owned(),
             selected_protocol: "unknown".to_owned(),
             transfer_backend: None,
@@ -137,6 +144,16 @@ impl RosWireError {
             error_code: ErrorCode::ConfigInsecurePermissions,
             message: message.into(),
             hint: Some("fix permissions to 0700 for directories and 0600 for files".to_owned()),
+            context: ErrorContext::default(),
+            exit_code: 2,
+        }
+    }
+
+    pub fn unsupported_action(message: impl Into<String>) -> Self {
+        Self {
+            error_code: ErrorCode::UnsupportedAction,
+            message: message.into(),
+            hint: Some("run `roswire commands --json` to discover supported commands".to_owned()),
             context: ErrorContext::default(),
             exit_code: 2,
         }
@@ -317,6 +334,10 @@ mod tests {
         assert_eq!(insecure.error_code, ErrorCode::ConfigInsecurePermissions);
         assert_eq!(insecure.exit_code(), 2);
 
+        let unsupported = RosWireError::unsupported_action("not implemented");
+        assert_eq!(unsupported.error_code, ErrorCode::UnsupportedAction);
+        assert_eq!(unsupported.exit_code(), 2);
+
         let help_missing = RosWireError::help_topic_not_found("foo bar");
         assert_eq!(help_missing.error_code, ErrorCode::HelpTopicNotFound);
         assert_eq!(help_missing.exit_code(), 2);
@@ -352,6 +373,8 @@ mod tests {
 
         let context = ErrorContext {
             command: "ip/address/add".to_owned(),
+            path: vec!["ip".to_owned(), "address".to_owned()],
+            action: "add".to_owned(),
             requested_protocol: "auto".to_owned(),
             selected_protocol: "rest".to_owned(),
             transfer_backend: Some("ssh".to_owned()),
