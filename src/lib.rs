@@ -21,6 +21,12 @@ pub fn run() -> RosWireResult<()> {
         ));
     }
 
+    if let Some(result) = introspect::handle(&cli.tokens) {
+        let payload = result?;
+        println!("{payload}");
+        return Ok(());
+    }
+
     let _invocation = args::parse_invocation(&cli.tokens)?;
 
     Ok(())
