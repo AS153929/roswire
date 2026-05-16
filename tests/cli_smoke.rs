@@ -37,3 +37,39 @@ fn structured_errors_are_written_to_stderr_only() {
         .stdout(predicate::str::is_empty())
         .stderr(predicate::str::contains("\"error_code\":\"USAGE_ERROR\""));
 }
+
+#[test]
+fn unimplemented_routeros_command_returns_unsupported_action() {
+    let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
+    cmd.args(["interface", "print", "--json"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains(
+            "\"error_code\":\"UNSUPPORTED_ACTION\"",
+        ))
+        .stderr(predicate::str::contains("\"command\":\"interface/print\""))
+        .stderr(predicate::str::contains("\"path\":[\"interface\"]"))
+        .stderr(predicate::str::contains("\"action\":\"print\""));
+}
+
+#[test]
+fn unsupported_action_context_redacts_sensitive_args() {
+    let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
+    cmd.args([
+        "ip",
+        "address",
+        "add",
+        "address=192.168.88.2/24",
+        "password=super-secret",
+        "--json",
+    ])
+    .assert()
+    .failure()
+    .stdout(predicate::str::is_empty())
+    .stderr(predicate::str::contains(
+        "\"error_code\":\"UNSUPPORTED_ACTION\"",
+    ))
+    .stderr(predicate::str::contains("super-secret").not())
+    .stderr(predicate::str::contains("***REDACTED***"));
+}
