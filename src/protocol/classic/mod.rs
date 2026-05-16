@@ -3,10 +3,64 @@ pub mod sentence;
 pub mod transport;
 
 use crate::error::{RosWireError, RosWireResult};
+use crate::mapping::ProtocolRequest;
 use crate::protocol::RouterOsMajor;
 use sentence::{parse_api_sentence, read_sentence, write_sentence, SentenceKind};
 use std::collections::BTreeMap;
 use transport::ApiStream;
+
+#[derive(Debug)]
+pub struct ClassicApiSession<S> {
+    stream: S,
+}
+
+impl<S: ApiStream> ClassicApiSession<S> {
+    pub fn new(stream: S) -> Self {
+        Self { stream }
+    }
+
+    pub fn login(&mut self, user: &str, password: &str) -> RosWireResult<()> {
+        login::login(&mut self.stream, user, password)
+    }
+
+    pub fn probe_resource(&mut self) -> RosWireResult<ResourceInfo> {
+        probe_resource(&mut self.stream)
+    }
+
+    pub fn execute_request(
+        &mut self,
+        request: &ProtocolRequest,
+    ) -> RosWireResult<Vec<BTreeMap<String, String>>> {
+        self.execute_words(&request.classic_api_words())
+    }
+
+    pub fn execute_words(
+        &mut self,
+        words: &[String],
+    ) -> RosWireResult<Vec<BTreeMap<String, String>>> {
+        write_sentence(&mut self.stream, words)?;
+
+        let mut rows = Vec::new();
+        loop {
+            let sentence_words = read_sentence(&mut self.stream)?;
+            let sentence = parse_api_sentence(&sentence_words)?;
+            match sentence.kind {
+                SentenceKind::Re => rows.push(sentence.attributes),
+                SentenceKind::Done => return Ok(rows),
+                SentenceKind::Trap | SentenceKind::Fatal => {
+                    return Err(Box::new(sentence.trap_error().unwrap_or_else(|| {
+                        RosWireError::ros_api_failure("RouterOS API command failed")
+                    })));
+                }
+                SentenceKind::Other(kind) => {
+                    return Err(Box::new(RosWireError::ros_api_failure(format!(
+                        "RouterOS API returned unsupported sentence kind: {kind}",
+                    ))));
+                }
+            }
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResourceInfo {
@@ -94,9 +148,13 @@ fn required_attribute(attributes: &BTreeMap<String, String>, name: &str) -> RosW
 
 #[cfg(test)]
 mod tests {
-    use super::{probe_resource, ResourceInfo};
+    use super::{probe_resource, ClassicApiSession, ResourceInfo};
+    use crate::args::ParsedInvocation;
+    use crate::error::ErrorCode;
+    use crate::mapping::build_protocol_request;
     use crate::protocol::classic::sentence::{read_sentence, write_sentence};
     use crate::protocol::RouterOsMajor;
+    use std::collections::BTreeMap;
     use std::io::{Cursor, Read, Result, Write};
 
     struct FakeApiStream {
@@ -178,5 +236,54 @@ mod tests {
 
         info.version = "unknown".to_owned();
         assert_eq!(info.routeros_major(), RouterOsMajor::Unknown);
+    }
+
+    #[test]
+    fn executor_collects_re_rows_until_done() {
+        let stream = FakeApiStream::with_sentences(&[
+            vec![
+                "!re".to_owned(),
+                "=.id=*1".to_owned(),
+                "=name=ether1".to_owned(),
+            ],
+            vec![
+                "!re".to_owned(),
+                "=.id=*2".to_owned(),
+                "=name=bridge".to_owned(),
+            ],
+            vec!["!done".to_owned()],
+        ]);
+        let mut session = ClassicApiSession::new(stream);
+        let request = build_protocol_request(&ParsedInvocation {
+            path: vec!["interface".to_owned()],
+            action: "print".to_owned(),
+            resolved_args: BTreeMap::new(),
+        })
+        .expect("request should map");
+
+        let rows = session
+            .execute_request(&request)
+            .expect("executor should succeed");
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].get("name").map(String::as_str), Some("ether1"));
+        assert_eq!(rows[1].get(".id").map(String::as_str), Some("*2"));
+        assert_eq!(session.stream.written_sentences()[0][0], "/interface/print");
+    }
+
+    #[test]
+    fn executor_maps_trap_to_ros_api_failure() {
+        let stream = FakeApiStream::with_sentences(&[vec![
+            "!trap".to_owned(),
+            "=message=no such item".to_owned(),
+        ]]);
+        let mut session = ClassicApiSession::new(stream);
+
+        let error = session
+            .execute_words(&["/ip/address/print".to_owned()])
+            .expect_err("trap should fail");
+
+        assert_eq!(error.error_code, ErrorCode::RosApiFailure);
+        assert_eq!(error.message, "no such item");
     }
 }

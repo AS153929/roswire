@@ -39,18 +39,44 @@ fn structured_errors_are_written_to_stderr_only() {
 }
 
 #[test]
-fn unimplemented_routeros_command_returns_unsupported_action() {
+fn unimplemented_write_command_returns_unsupported_action() {
     let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
+    cmd.args([
+        "ip",
+        "address",
+        "add",
+        "address=192.168.88.2/24",
+        "interface=ether1",
+        "--json",
+    ])
+    .assert()
+    .failure()
+    .stdout(predicate::str::is_empty())
+    .stderr(predicate::str::contains(
+        "\"error_code\":\"UNSUPPORTED_ACTION\"",
+    ))
+    .stderr(predicate::str::contains("\"command\":\"ip/address/add\""))
+    .stderr(predicate::str::contains("\"path\":[\"ip\",\"address\"]"))
+    .stderr(predicate::str::contains("\"action\":\"add\""));
+}
+
+#[test]
+fn readonly_print_without_connection_config_returns_config_error() {
+    let temp = tempfile::tempdir().expect("temp dir should be created");
+    let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
+    cmd.env("ROSWIRE_HOME", temp.path())
+        .env_remove("ROS_PROFILE")
+        .env_remove("ROS_HOST")
+        .env_remove("ROS_USER")
+        .env_remove("ROS_PASSWORD")
+        .env_remove("ROS_PORT")
+        .env_remove("ROS_PROTOCOL")
+        .env_remove("ROS_ROUTEROS_VERSION");
     cmd.args(["interface", "print", "--json"])
         .assert()
         .failure()
         .stdout(predicate::str::is_empty())
-        .stderr(predicate::str::contains(
-            "\"error_code\":\"UNSUPPORTED_ACTION\"",
-        ))
-        .stderr(predicate::str::contains("\"command\":\"interface/print\""))
-        .stderr(predicate::str::contains("\"path\":[\"interface\"]"))
-        .stderr(predicate::str::contains("\"action\":\"print\""));
+        .stderr(predicate::str::contains("\"error_code\":\"CONFIG_ERROR\""));
 }
 
 #[test]
