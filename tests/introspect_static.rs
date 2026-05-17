@@ -54,7 +54,17 @@ fn doctor_json_is_local_by_default() {
         .stdout(predicate::str::contains("\"local\""))
         .stdout(predicate::str::contains("\"remote\"").not())
         .stdout(predicate::str::contains("HOME_MISSING"))
-        .stdout(predicate::str::contains("CONFIG_MISSING"));
+        .stdout(predicate::str::contains("CONFIG_MISSING"))
+        .stdout(predicate::str::contains("\"rest_client\":\"available\""))
+        .stdout(predicate::str::contains(
+            "\"keychain_backend\":\"available\"",
+        ))
+        .stdout(predicate::str::contains(
+            "\"api_ssl_tls\":\"not_implemented\"",
+        ))
+        .stdout(predicate::str::contains(
+            "\"ssh_transfer_runtime\":\"not_implemented\"",
+        ));
 }
 
 #[test]

@@ -244,9 +244,33 @@ fn local_routeros_version_hint(
 fn local_dependencies() -> BTreeMap<String, String> {
     BTreeMap::from([
         ("classic_api_tcp".to_owned(), "available".to_owned()),
+        (
+            "classic_api_sentence_codec".to_owned(),
+            "available".to_owned(),
+        ),
+        ("classic_api_login".to_owned(), "available".to_owned()),
         ("api_ssl_tls".to_owned(), "not_implemented".to_owned()),
-        ("rest_client".to_owned(), "not_implemented".to_owned()),
-        ("keychain_backend".to_owned(), "not_implemented".to_owned()),
+        ("rest_client".to_owned(), "available".to_owned()),
+        (
+            "rest_remote_doctor".to_owned(),
+            "not_implemented".to_owned(),
+        ),
+        ("plain_secret_backend".to_owned(), "available".to_owned()),
+        ("env_secret_backend".to_owned(), "available".to_owned()),
+        (
+            "encrypted_secret_backend".to_owned(),
+            "available".to_owned(),
+        ),
+        ("keychain_backend".to_owned(), "available".to_owned()),
+        ("ssh_transfer_dry_run".to_owned(), "available".to_owned()),
+        (
+            "ssh_transfer_runtime".to_owned(),
+            "not_implemented".to_owned(),
+        ),
+        (
+            "remote_schema_overlay".to_owned(),
+            "not_implemented".to_owned(),
+        ),
     ])
 }
 
@@ -286,6 +310,24 @@ mod tests {
         );
         assert_eq!(
             dependencies.get("rest_client").map(String::as_str),
+            Some("available"),
+        );
+        assert_eq!(
+            dependencies.get("keychain_backend").map(String::as_str),
+            Some("available"),
+        );
+        assert_eq!(
+            dependencies
+                .get("encrypted_secret_backend")
+                .map(String::as_str),
+            Some("available"),
+        );
+        assert_eq!(
+            dependencies.get("api_ssl_tls").map(String::as_str),
+            Some("not_implemented"),
+        );
+        assert_eq!(
+            dependencies.get("ssh_transfer_runtime").map(String::as_str),
             Some("not_implemented"),
         );
     }
