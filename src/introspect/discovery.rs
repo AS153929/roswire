@@ -1,4 +1,6 @@
 use crate::introspect::cache::{compute_cache_key, DeviceFingerprint};
+use crate::introspect::CommandDefinition;
+use crate::{args::ParsedInvocation, error::ErrorCode};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
@@ -87,13 +89,117 @@ pub fn remote_schema_unavailable_snapshot(
     }
 }
 
+pub fn degraded_remote_schema_snapshot(
+    profile: &str,
+    fingerprint: &DeviceFingerprint,
+    policies: Vec<StaticCommandPolicy>,
+    warning: impl Into<String>,
+) -> RemoteSchemaSnapshot {
+    let warning = warning.into();
+    let commands = policies
+        .into_iter()
+        .map(|policy| {
+            let overlay = RemoteOverlayCommand {
+                name: policy.name.clone(),
+                support: "unknown".to_owned(),
+                output_fields_observed: static_output_fields(&policy.name),
+                runtime_value_hints: BTreeMap::new(),
+                attempted_side_effects_override: None,
+                attempted_idempotency_override: None,
+                warnings: vec![warning.clone()],
+            };
+            merge_overlay(&policy, &overlay)
+        })
+        .collect();
+
+    RemoteSchemaSnapshot {
+        schema_version: "roswire.remote.schema.v1".to_owned(),
+        schema_source: vec!["static_catalog".to_owned(), "remote_overlay".to_owned()],
+        profile: profile.to_owned(),
+        device: fingerprint.clone(),
+        cache: RemoteSchemaCacheStatus {
+            status: "miss".to_owned(),
+            ttl_seconds: 604_800,
+            cache_key: compute_cache_key(profile, fingerprint),
+        },
+        commands,
+        warnings: vec![warning],
+    }
+}
+
+pub fn policy_from_command(command: &CommandDefinition) -> Option<StaticCommandPolicy> {
+    let tokens = command.name.split_whitespace().collect::<Vec<_>>();
+    let action = tokens.last()?;
+    let path = tokens[..tokens.len().saturating_sub(1)]
+        .iter()
+        .map(|token| (*token).to_owned())
+        .collect::<Vec<_>>();
+    let invocation = ParsedInvocation {
+        path,
+        action: (*action).to_owned(),
+        resolved_args: BTreeMap::new(),
+    };
+    let mapping = crate::mapping::resolve_mapping(&invocation).ok()?;
+
+    Some(StaticCommandPolicy {
+        name: command.name.clone(),
+        side_effects: mapping.side_effects,
+        idempotency: mapping.idempotency,
+    })
+}
+
+pub fn policies_from_catalog(commands: &[CommandDefinition]) -> Vec<StaticCommandPolicy> {
+    commands.iter().filter_map(policy_from_command).collect()
+}
+
+pub fn unknown_fingerprint(host: &str, selected_protocol: &str) -> DeviceFingerprint {
+    DeviceFingerprint {
+        host_id_hashed: crate::introspect::cache::hash_host_id(host),
+        routeros_version: "unknown".to_owned(),
+        build_time: "unknown".to_owned(),
+        architecture: "unknown".to_owned(),
+        board_name: "unknown".to_owned(),
+        packages_hash: "unknown".to_owned(),
+        selected_protocol: selected_protocol.to_owned(),
+    }
+}
+
+pub fn warning_name(code: ErrorCode) -> String {
+    serde_json::to_value(code)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "CAPABILITY_PROBE_FAILED".to_owned())
+}
+
+fn static_output_fields(command: &str) -> Vec<String> {
+    match command {
+        "system resource print" => vec![
+            "version".to_owned(),
+            "architecture-name".to_owned(),
+            "board-name".to_owned(),
+        ],
+        "interface print" => vec![".id".to_owned(), "name".to_owned(), "disabled".to_owned()],
+        "ip address print" => vec![
+            ".id".to_owned(),
+            "address".to_owned(),
+            "network".to_owned(),
+            "interface".to_owned(),
+            "disabled".to_owned(),
+        ],
+        _ => Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        merge_overlay, remote_schema_unavailable_snapshot, RemoteOverlayCommand,
-        StaticCommandPolicy,
+        degraded_remote_schema_snapshot, merge_overlay, policies_from_catalog,
+        remote_schema_unavailable_snapshot, unknown_fingerprint, warning_name,
+        RemoteOverlayCommand, StaticCommandPolicy,
     };
+    use crate::error::ErrorCode;
     use crate::introspect::cache::{hash_host_id, DeviceFingerprint};
+    use crate::introspect::CommandDefinition;
     use std::collections::BTreeMap;
 
     fn fingerprint() -> DeviceFingerprint {
@@ -151,5 +257,62 @@ mod tests {
             .any(|w| w == "REMOTE_SCHEMA_UNAVAILABLE"));
         assert!(snapshot.cache.cache_key.starts_with("cache:"));
         assert!(!snapshot.cache.cache_key.contains("192.168.88.1"));
+    }
+
+    #[test]
+    fn degraded_snapshot_keeps_static_policy_and_uses_hashed_cache_key() {
+        let fp = unknown_fingerprint("198.51.100.10", "unknown");
+        let policies = vec![StaticCommandPolicy {
+            name: "ip address add".to_owned(),
+            side_effects: vec!["creates-routeros-record".to_owned()],
+            idempotency: "not-idempotent".to_owned(),
+        }];
+
+        let snapshot = degraded_remote_schema_snapshot(
+            "studio",
+            &fp,
+            policies,
+            warning_name(ErrorCode::NetworkError),
+        );
+
+        assert_eq!(snapshot.cache.status, "miss");
+        assert!(!snapshot.cache.cache_key.contains("198.51.100.10"));
+        assert_eq!(snapshot.commands[0].support, "unknown");
+        assert_eq!(
+            snapshot.commands[0].side_effects,
+            vec!["creates-routeros-record"]
+        );
+        assert_eq!(snapshot.commands[0].idempotency, "not-idempotent");
+        assert!(snapshot.warnings.iter().any(|item| item == "NETWORK_ERROR"));
+    }
+
+    #[test]
+    fn policies_from_catalog_filters_to_routeros_mapped_commands() {
+        let commands = vec![
+            CommandDefinition {
+                name: "ip address print".to_owned(),
+                summary: String::new(),
+                kind: "routeros-command".to_owned(),
+                syntax: String::new(),
+                arguments: Vec::new(),
+                examples: Vec::new(),
+                errors: Vec::new(),
+            },
+            CommandDefinition {
+                name: "config inspect".to_owned(),
+                summary: String::new(),
+                kind: "config".to_owned(),
+                syntax: String::new(),
+                arguments: Vec::new(),
+                examples: Vec::new(),
+                errors: Vec::new(),
+            },
+        ];
+
+        let policies = policies_from_catalog(&commands);
+
+        assert_eq!(policies.len(), 1);
+        assert_eq!(policies[0].name, "ip address print");
+        assert_eq!(policies[0].idempotency, "read-only");
     }
 }

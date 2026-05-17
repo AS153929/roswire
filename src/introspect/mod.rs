@@ -78,14 +78,7 @@ pub fn handle(tokens: &[String], cli: &Cli) -> Option<RosWireResult<String>> {
 
     let command = tokens[0].as_str();
 
-    if cli.remote
-        && (command == "commands"
-            || (command == "schema"
-                && matches!(
-                    tokens.get(1).map(String::as_str),
-                    Some("command") | Some("discover")
-                )))
-    {
+    if cli.remote && command == "commands" {
         return Some(Err(Box::new(RosWireError::remote_schema_unavailable())));
     }
 
@@ -93,6 +86,7 @@ pub fn handle(tokens: &[String], cli: &Cli) -> Option<RosWireResult<String>> {
         "commands" => Some(render_json(&commands_payload())),
         "doctor" => Some(doctor::doctor_payload(cli)),
         "help" => Some(help_payload(tokens)),
+        "schema" if cli.remote => Some(remote_schema_payload(tokens, cli)),
         "schema" => Some(schema_payload(tokens)),
         "explain-error" => Some(explain_error_payload(tokens)),
         _ => None,
@@ -148,6 +142,12 @@ fn help_payload(tokens: &[String]) -> RosWireResult<String> {
 }
 
 fn schema_payload(tokens: &[String]) -> RosWireResult<String> {
+    if tokens.get(1).map(String::as_str) == Some("discover") {
+        return Err(Box::new(RosWireError::usage(
+            "schema discover requires --remote: roswire schema discover --remote --json",
+        )));
+    }
+
     if tokens.len() < 3 || tokens[1].as_str() != "command" {
         return Err(Box::new(RosWireError::usage(
             "schema command requires: roswire schema command <command...>",
@@ -163,6 +163,43 @@ fn schema_payload(tokens: &[String]) -> RosWireResult<String> {
         command: command.name,
         arguments: command.arguments,
     })
+}
+
+fn remote_schema_payload(tokens: &[String], cli: &Cli) -> RosWireResult<String> {
+    let commands = catalog();
+    let policies = match tokens.get(1).map(String::as_str) {
+        Some("discover") => discovery::policies_from_catalog(&commands),
+        Some("command") if tokens.len() >= 3 => {
+            let topic = normalize_topic(&tokens[2..]);
+            let command = lookup_command(&topic)
+                .ok_or_else(|| Box::new(RosWireError::schema_unavailable(topic.clone())))?;
+            discovery::policy_from_command(&command)
+                .map(|policy| vec![policy])
+                .ok_or_else(|| Box::new(RosWireError::schema_unavailable(topic)))?
+        }
+        _ => {
+            return Err(Box::new(RosWireError::usage(
+                "remote schema requires: roswire schema discover --remote --json or roswire schema command <command...> --remote --json",
+            )));
+        }
+    };
+
+    let (profile, fingerprint, warning) = match crate::resolve_execution_target(cli) {
+        Ok(target) => (
+            cli.profile.clone().unwrap_or_else(|| "default".to_owned()),
+            discovery::unknown_fingerprint(&target.host, &target.requested_protocol),
+            "CAPABILITY_PROBE_FAILED".to_owned(),
+        ),
+        Err(error) => (
+            cli.profile.clone().unwrap_or_else(|| "default".to_owned()),
+            discovery::unknown_fingerprint("unknown", "unknown"),
+            discovery::warning_name(error.error_code),
+        ),
+    };
+
+    let snapshot =
+        discovery::degraded_remote_schema_snapshot(&profile, &fingerprint, policies, warning);
+    render_json(&snapshot)
 }
 
 fn explain_error_payload(tokens: &[String]) -> RosWireResult<String> {

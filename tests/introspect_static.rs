@@ -186,15 +186,37 @@ fn commands_remote_branch_reports_remote_schema_unavailable() {
 }
 
 #[test]
-fn schema_discover_remote_branch_reports_remote_schema_unavailable() {
+fn schema_discover_remote_returns_degraded_snapshot_without_config() {
     let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
+    let temp = tempfile::tempdir().expect("temp dir should be created");
+    cmd.env("ROSWIRE_HOME", temp.path().join("missing-home"));
     cmd.args(["schema", "discover", "--remote", "--json"])
         .assert()
-        .failure()
-        .stdout(predicate::str::is_empty())
-        .stderr(predicate::str::contains(
-            "\"error_code\":\"REMOTE_SCHEMA_UNAVAILABLE\"",
-        ));
+        .success()
+        .stderr(predicate::str::is_empty())
+        .stdout(predicate::str::contains(
+            "\"schema_version\":\"roswire.remote.schema.v1\"",
+        ))
+        .stdout(predicate::str::contains("\"cache_key\":\"cache:"))
+        .stdout(predicate::str::contains("CONFIG_ERROR"))
+        .stdout(predicate::str::contains("ip address print"));
+}
+
+#[test]
+fn schema_command_remote_returns_single_degraded_overlay() {
+    let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
+    let temp = tempfile::tempdir().expect("temp dir should be created");
+    cmd.env("ROSWIRE_HOME", temp.path().join("missing-home"));
+    cmd.args([
+        "schema", "command", "ip", "address", "add", "--remote", "--json",
+    ])
+    .assert()
+    .success()
+    .stderr(predicate::str::is_empty())
+    .stdout(predicate::str::contains("\"commands\":"))
+    .stdout(predicate::str::contains("\"name\":\"ip address add\""))
+    .stdout(predicate::str::contains("creates-routeros-record"))
+    .stdout(predicate::str::contains("\"support\":\"unknown\""));
 }
 
 fn generated_credential() -> String {
