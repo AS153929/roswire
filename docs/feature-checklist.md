@@ -109,7 +109,7 @@
 - [ ] `/ip/route` 命令族
 - [ ] `/interface/wireguard` 命令族
 - [x] `/system/package` 命令族（print，#73）
-- [ ] `/user` 命令族
+- [x] `/user` 命令族（print，#74）
 - [ ] `/tool` 命令族
 - [ ] 原始命令透传模式
 - [ ] `script put <name> --source @<local.rsc>` 工作流
@@ -344,6 +344,6 @@
 - #71 `M7: 扩展 /ip/route 命令族`
 - #72 `M7: 扩展 /interface/wireguard 命令族`
 - #73 `M7: 扩展 /system/package 命令族`（完成：print）
-- #74 `M7: 扩展 /user 命令族`
+- #74 `M7: 扩展 /user 命令族`（完成：print）
 - #75 `M7: 扩展 /tool 命令族`
 - #76 `Cleanup: 审计 unsupported/not implemented 文案与 checklist 同步`
