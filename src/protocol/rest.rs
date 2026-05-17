@@ -49,6 +49,10 @@ impl RestClient {
         self.send(RestMethod::Get, path, None)
     }
 
+    pub fn post_json(&self, path: &str, body: Value) -> RosWireResult<Value> {
+        self.send(RestMethod::Post, path, Some(body))
+    }
+
     pub fn system_resource(&self) -> RosWireResult<Value> {
         self.get("/rest/system/resource")
     }
@@ -147,7 +151,7 @@ fn basic_auth_header(user: &str, password: &str) -> String {
 fn request_body(method: RestMethod, request: &ProtocolRequest) -> Option<Value> {
     match method {
         RestMethod::Get | RestMethod::Delete => None,
-        RestMethod::Put | RestMethod::Patch => Some(
+        RestMethod::Post | RestMethod::Put | RestMethod::Patch => Some(
             request
                 .resolved_args
                 .iter()
@@ -344,6 +348,26 @@ mod tests {
         assert_eq!(value, serde_json::json!({ "status": "ok" }));
         assert!(delete_request.contains("DELETE /rest/ip/address/*1 HTTP/1.1"));
         assert!(!delete_request.contains("Content-Type: application/json"));
+    }
+
+    #[test]
+    fn rest_post_json_sends_body_and_accepts_empty_success() {
+        let server = TestServer::responding_with(204, "application/json", "");
+        let credential = test_credential();
+        let client = RestClient::with_base_url(server.base_url(), "admin", &credential);
+
+        let value = client
+            .post_json(
+                "/rest/export",
+                serde_json::json!({ "file": "roswire-export", "compact": "yes" }),
+            )
+            .expect("empty POST success should be accepted");
+        let request = server.request();
+
+        assert_eq!(value, serde_json::json!({ "status": "ok" }));
+        assert!(request.contains("POST /rest/export HTTP/1.1"));
+        assert!(request.contains("Content-Type: application/json"));
+        assert!(request.contains(r#""file":"roswire-export""#));
     }
 
     #[test]

@@ -35,6 +35,7 @@ impl ActionKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RestMethod {
     Get,
+    Post,
     Put,
     Patch,
     Delete,
@@ -44,6 +45,7 @@ impl RestMethod {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Get => "GET",
+            Self::Post => "POST",
             Self::Put => "PUT",
             Self::Patch => "PATCH",
             Self::Delete => "DELETE",
