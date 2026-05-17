@@ -22,8 +22,11 @@ pub enum ErrorCode {
     SecretNotFound,
     SecretDecryptFailed,
     SshHostKeyRequired,
+    SshHostKeyMismatch,
     SshWhitelistRequired,
     SshWhitelistUnsafe,
+    FileTooLarge,
+    FileTransferFailed,
     InternalError,
 }
 
@@ -170,6 +173,16 @@ impl RosWireError {
         }
     }
 
+    pub fn ssh_host_key_mismatch(message: impl Into<String>) -> Self {
+        Self {
+            error_code: ErrorCode::SshHostKeyMismatch,
+            message: message.into(),
+            hint: Some("verify the RouterOS SSH host key fingerprint out-of-band".to_owned()),
+            context: ErrorContext::default(),
+            exit_code: 3,
+        }
+    }
+
     pub fn ssh_whitelist_required(message: impl Into<String>) -> Self {
         Self {
             error_code: ErrorCode::SshWhitelistRequired,
@@ -189,6 +202,26 @@ impl RosWireError {
             ),
             context: ErrorContext::default(),
             exit_code: 2,
+        }
+    }
+
+    pub fn file_too_large(message: impl Into<String>) -> Self {
+        Self {
+            error_code: ErrorCode::FileTooLarge,
+            message: message.into(),
+            hint: Some("reduce file size or split the transfer into smaller artifacts".to_owned()),
+            context: ErrorContext::default(),
+            exit_code: 2,
+        }
+    }
+
+    pub fn file_transfer_failed(message: impl Into<String>) -> Self {
+        Self {
+            error_code: ErrorCode::FileTransferFailed,
+            message: message.into(),
+            hint: Some("check SSH credentials, permissions, paths, and available space".to_owned()),
+            context: ErrorContext::default(),
+            exit_code: 6,
         }
     }
 
@@ -455,6 +488,10 @@ mod tests {
         assert_eq!(host_key.error_code, ErrorCode::SshHostKeyRequired);
         assert_eq!(host_key.exit_code(), 2);
 
+        let host_key_mismatch = RosWireError::ssh_host_key_mismatch("host key mismatch");
+        assert_eq!(host_key_mismatch.error_code, ErrorCode::SshHostKeyMismatch);
+        assert_eq!(host_key_mismatch.exit_code(), 3);
+
         let whitelist = RosWireError::ssh_whitelist_required("allow-from required");
         assert_eq!(whitelist.error_code, ErrorCode::SshWhitelistRequired);
         assert_eq!(whitelist.exit_code(), 2);
@@ -462,6 +499,14 @@ mod tests {
         let unsafe_whitelist = RosWireError::ssh_whitelist_unsafe("allow-from too wide");
         assert_eq!(unsafe_whitelist.error_code, ErrorCode::SshWhitelistUnsafe);
         assert_eq!(unsafe_whitelist.exit_code(), 2);
+
+        let too_large = RosWireError::file_too_large("too large");
+        assert_eq!(too_large.error_code, ErrorCode::FileTooLarge);
+        assert_eq!(too_large.exit_code(), 2);
+
+        let transfer_failed = RosWireError::file_transfer_failed("copy failed");
+        assert_eq!(transfer_failed.error_code, ErrorCode::FileTransferFailed);
+        assert_eq!(transfer_failed.exit_code(), 6);
     }
 
     #[test]

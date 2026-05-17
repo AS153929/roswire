@@ -25,6 +25,7 @@ rand = "0.8"
 sha2 = "0.10"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-pki-types = "1"
+ssh2 = { version = "0.9", features = ["vendored-openssl"] }
 ureq = { version = "2", default-features = false, features = ["tls"] }
 webpki-roots = "0.26"
 
