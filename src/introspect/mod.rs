@@ -487,6 +487,35 @@ fn catalog() -> Vec<CommandDefinition> {
             ],
         },
         CommandDefinition {
+            name: "tool mac-server print".to_owned(),
+            summary: "Print RouterOS MAC server settings without changing service state."
+                .to_owned(),
+            kind: "routeros-command".to_owned(),
+            syntax: "roswire tool mac-server print --json".to_owned(),
+            arguments: vec![],
+            examples: vec!["roswire tool mac-server print --json".to_owned()],
+            errors: vec![
+                "USAGE_ERROR".to_owned(),
+                "AUTH_FAILED".to_owned(),
+                "NETWORK_ERROR".to_owned(),
+                "ROS_API_FAILURE".to_owned(),
+            ],
+        },
+        CommandDefinition {
+            name: "tool netwatch print".to_owned(),
+            summary: "Print RouterOS Netwatch entries; does not run ad-hoc probes.".to_owned(),
+            kind: "routeros-command".to_owned(),
+            syntax: "roswire tool netwatch print --json".to_owned(),
+            arguments: vec![],
+            examples: vec!["roswire tool netwatch print --json".to_owned()],
+            errors: vec![
+                "USAGE_ERROR".to_owned(),
+                "AUTH_FAILED".to_owned(),
+                "NETWORK_ERROR".to_owned(),
+                "ROS_API_FAILURE".to_owned(),
+            ],
+        },
+        CommandDefinition {
             name: "user print".to_owned(),
             summary: "Print RouterOS users without exposing password material.".to_owned(),
             kind: "routeros-command".to_owned(),

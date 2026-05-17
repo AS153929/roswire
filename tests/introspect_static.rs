@@ -18,6 +18,8 @@ fn commands_json_contains_catalog_entries() {
         .stdout(predicate::str::contains("interface wireguard print"))
         .stdout(predicate::str::contains("interface wireguard peers print"))
         .stdout(predicate::str::contains("system package print"))
+        .stdout(predicate::str::contains("tool mac-server print"))
+        .stdout(predicate::str::contains("tool netwatch print"))
         .stdout(predicate::str::contains("user print"))
         .stdout(predicate::str::contains("doctor"));
 }
@@ -103,6 +105,19 @@ fn help_firewall_print_returns_command_details() {
             "\"name\":\"ip firewall filter print\"",
         ))
         .stdout(predicate::str::contains("without changing packet handling"));
+}
+
+#[test]
+fn help_tool_print_returns_command_details() {
+    let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
+    cmd.args(["help", "tool", "netwatch", "print", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"schema_version\":\"roswire.command.help.v1\"",
+        ))
+        .stdout(predicate::str::contains("\"name\":\"tool netwatch print\""))
+        .stdout(predicate::str::contains("does not run ad-hoc probes"));
 }
 
 #[test]
@@ -275,6 +290,22 @@ fn schema_firewall_prints_are_registered() {
         ["ip", "firewall", "address-list", "print"],
         ["ip", "firewall", "filter", "print"],
         ["ip", "firewall", "nat", "print"],
+    ] {
+        let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
+        cmd.args(["schema", "command"])
+            .args(topic)
+            .arg("--json")
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("\"arguments\":[]"));
+    }
+}
+
+#[test]
+fn schema_tool_prints_are_registered() {
+    for topic in [
+        ["tool", "mac-server", "print"],
+        ["tool", "netwatch", "print"],
     ] {
         let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
         cmd.args(["schema", "command"])
@@ -474,6 +505,22 @@ fn schema_command_remote_firewall_has_static_fields() {
     ))
     .stdout(predicate::str::contains("\"chain\""))
     .stdout(predicate::str::contains("\"to-addresses\""));
+}
+
+#[test]
+fn schema_command_remote_tool_has_static_fields() {
+    let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
+    let temp = tempfile::tempdir().expect("temp dir should be created");
+    cmd.env("ROSWIRE_HOME", temp.path().join("missing-home"));
+    cmd.args([
+        "schema", "command", "tool", "netwatch", "print", "--remote", "--json",
+    ])
+    .assert()
+    .success()
+    .stderr(predicate::str::is_empty())
+    .stdout(predicate::str::contains("\"name\":\"tool netwatch print\""))
+    .stdout(predicate::str::contains("\"status\""))
+    .stdout(predicate::str::contains("\"support\":\"unknown\""));
 }
 
 #[test]

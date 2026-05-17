@@ -185,6 +185,21 @@ fn static_output_fields(command: &str) -> Vec<String> {
             "build-time".to_owned(),
             "disabled".to_owned(),
         ],
+        "tool mac-server print" => vec![
+            ".id".to_owned(),
+            "allowed-interface-list".to_owned(),
+            "disabled".to_owned(),
+        ],
+        "tool netwatch print" => vec![
+            ".id".to_owned(),
+            "host".to_owned(),
+            "type".to_owned(),
+            "interval".to_owned(),
+            "timeout".to_owned(),
+            "status".to_owned(),
+            "disabled".to_owned(),
+            "comment".to_owned(),
+        ],
         "user print" => vec![
             ".id".to_owned(),
             "name".to_owned(),
@@ -519,6 +534,39 @@ mod tests {
         assert!(snapshot.commands[2]
             .output_fields_observed
             .contains(&"to-addresses".to_owned()));
+    }
+
+    #[test]
+    fn degraded_snapshot_includes_tool_static_fields() {
+        let fp = unknown_fingerprint("198.51.100.10", "unknown");
+        let policies = vec![
+            StaticCommandPolicy {
+                name: "tool mac-server print".to_owned(),
+                side_effects: Vec::new(),
+                idempotency: "read-only".to_owned(),
+            },
+            StaticCommandPolicy {
+                name: "tool netwatch print".to_owned(),
+                side_effects: Vec::new(),
+                idempotency: "read-only".to_owned(),
+            },
+        ];
+
+        let snapshot = degraded_remote_schema_snapshot(
+            "studio",
+            &fp,
+            policies,
+            warning_name(ErrorCode::ConfigError),
+        );
+
+        assert_eq!(snapshot.commands[0].name, "tool mac-server print");
+        assert!(snapshot.commands[0]
+            .output_fields_observed
+            .contains(&"allowed-interface-list".to_owned()));
+        assert_eq!(snapshot.commands[1].name, "tool netwatch print");
+        assert!(snapshot.commands[1]
+            .output_fields_observed
+            .contains(&"status".to_owned()));
     }
 
     #[test]

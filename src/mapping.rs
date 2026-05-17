@@ -257,6 +257,22 @@ pub fn resolve_mapping(invocation: &ParsedInvocation) -> RosWireResult<CommandMa
                 path: "/rest/system/package".to_owned(),
             }),
         )),
+        (["tool", "mac-server"], "print") => Ok(print_mapping(
+            &["tool", "mac-server"],
+            "/tool/mac-server/print",
+            Some(RestMapping {
+                method: RestMethod::Get,
+                path: "/rest/tool/mac-server".to_owned(),
+            }),
+        )),
+        (["tool", "netwatch"], "print") => Ok(print_mapping(
+            &["tool", "netwatch"],
+            "/tool/netwatch/print",
+            Some(RestMapping {
+                method: RestMethod::Get,
+                path: "/rest/tool/netwatch".to_owned(),
+            }),
+        )),
         (["user"], "print") => Ok(print_mapping(
             &["user"],
             "/user/print",
@@ -547,6 +563,37 @@ mod tests {
                 .map(|rest| (&rest.method, rest.path.as_str())),
             Some((&RestMethod::Get, "/rest/system/package")),
         );
+    }
+
+    #[test]
+    fn maps_tool_prints_as_read_only_with_rest_support() {
+        for (path, classic_path, rest_path) in [
+            (
+                &["tool", "mac-server"][..],
+                "/tool/mac-server/print",
+                "/rest/tool/mac-server",
+            ),
+            (
+                &["tool", "netwatch"][..],
+                "/tool/netwatch/print",
+                "/rest/tool/netwatch",
+            ),
+        ] {
+            let mapping = resolve_mapping(&invocation(path, "print", &[]))
+                .expect("tool print should resolve");
+
+            assert_eq!(mapping.action_kind, ActionKind::Print);
+            assert_eq!(mapping.routeros_path, classic_path);
+            assert_eq!(mapping.idempotency, "read-only");
+            assert!(mapping.side_effects.is_empty());
+            assert_eq!(
+                mapping
+                    .rest_mapping
+                    .as_ref()
+                    .map(|rest| (&rest.method, rest.path.as_str())),
+                Some((&RestMethod::Get, rest_path)),
+            );
+        }
     }
 
     #[test]
