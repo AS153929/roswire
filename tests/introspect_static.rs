@@ -456,6 +456,15 @@ fn explain_error_returns_machine_readable_details() {
         .stdout(predicate::str::contains(
             "\"error_code\":\"ROS_API_FAILURE\"",
         ));
+
+    let mut restore = Command::cargo_bin("roswire").expect("binary should compile");
+    restore
+        .args(["explain-error", "SSH_RESTORE_FAILED", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"error_code\":\"SSH_RESTORE_FAILED\"",
+        ));
 }
 
 #[test]

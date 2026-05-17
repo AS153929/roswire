@@ -228,12 +228,12 @@
 - [x] 拒绝过宽 IPv4 白名单
 - [x] 拒绝过宽 IPv6 白名单
 - [x] 缺少白名单时返回结构化错误
-- [ ] 真实执行 `/ip service ssh` enable / address set
-- [ ] 任务前 SSH 服务快照
-- [ ] 成功路径 restore SSH 服务配置
-- [ ] 失败路径 restore SSH 服务配置
-- [ ] 中断路径 restore SSH 服务配置
-- [ ] 白名单追加/合并现有地址而非覆盖
+- [x] 真实执行 `/ip service ssh` enable / address set
+- [x] 任务前 SSH 服务快照
+- [x] 成功路径 restore SSH 服务配置
+- [x] 失败路径 restore SSH 服务配置
+- [ ] 中断路径自动 restore（当前在 dry-run 明确限制：不捕获进程中断）
+- [x] 白名单追加/合并现有地址而非覆盖
 
 ## JSONL 日志与调试
 
@@ -335,7 +335,7 @@
 - #62 `M8: 多平台 keychain smoke 测试`
 - #63 `M8: 定义生产级稳定版验收门槛`
 - #64 `M7: 扩展远端 schema cache TTL/refresh 与菜单 overlay`（完成：hit/miss/stale/refresh 决策、`--refresh`、overlay enum 来源标记）
-- #65 `M7: 实现 SSH 服务 ensure/restore 与白名单合并`
+- #65 `M7: 实现 SSH 服务 ensure/restore 与白名单合并`（完成：SSH service 快照、enable/address 合并、成功/失败 restore、`SSH_RESTORE_FAILED`）
 - #66 `M7: 增强文件工作流覆盖策略、超时与重试`
 - #67 `M7: 实现 SCP fallback 与加密 SSH 私钥 passphrase 支持`
 - #68 `M7: 实现 system script put 工作流`（完成：dry-run、UTF-8/大小校验、classic/REST 写入映射与脱敏）

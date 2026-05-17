@@ -53,6 +53,10 @@ impl RestClient {
         self.send(RestMethod::Post, path, Some(body))
     }
 
+    pub fn patch_json(&self, path: &str, body: Value) -> RosWireResult<Value> {
+        self.send(RestMethod::Patch, path, Some(body))
+    }
+
     pub fn system_resource(&self) -> RosWireResult<Value> {
         self.get("/rest/system/resource")
     }

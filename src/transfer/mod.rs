@@ -165,6 +165,23 @@ struct ControlRuntimeConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct SshServiceSnapshot {
+    id: Option<String>,
+    disabled: bool,
+    address: Vec<String>,
+}
+
+impl Default for SshServiceSnapshot {
+    fn default() -> Self {
+        Self {
+            id: Some("ssh".to_owned()),
+            disabled: false,
+            address: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum ControlCommand {
     Import { file_name: String },
     BackupSave { name: String },
@@ -207,6 +224,12 @@ impl ControlCommand {
 }
 
 trait WorkflowBackend {
+    fn read_ssh_service(&mut self, context: &ErrorContext) -> RosWireResult<SshServiceSnapshot>;
+    fn apply_ssh_service(
+        &mut self,
+        desired: &SshServiceSnapshot,
+        context: &ErrorContext,
+    ) -> RosWireResult<()>;
     fn upload(
         &mut self,
         local: &str,
@@ -251,6 +274,20 @@ impl LiveWorkflowBackend {
 }
 
 impl WorkflowBackend for LiveWorkflowBackend {
+    fn read_ssh_service(&mut self, context: &ErrorContext) -> RosWireResult<SshServiceSnapshot> {
+        let context = selected_context(context, &self.control.selected_protocol);
+        read_ssh_service(&self.control, context)
+    }
+
+    fn apply_ssh_service(
+        &mut self,
+        desired: &SshServiceSnapshot,
+        context: &ErrorContext,
+    ) -> RosWireResult<()> {
+        let context = selected_context(context, &self.control.selected_protocol);
+        apply_ssh_service(&self.control, desired, context)
+    }
+
     fn upload(
         &mut self,
         local: &str,
@@ -436,43 +473,90 @@ fn execute_transfer_for_env(
     let profile = load_selected_profile(cli, env)?;
     let ssh_runtime = resolve_ssh_runtime_config(cli, env, profile.as_ref())
         .map_err(|error| Box::new((*error).clone().with_context(context.clone())))?;
+    let allow_from = resolve_allow_from_for_runtime(cli, env, &context)?;
 
     match &command {
         TransferCommand::FileUpload { local, remote } => {
-            execute_upload(local, remote, &ssh_runtime, &context).map(|(bytes, checksum_sha256)| {
-                TransferResultPayload {
-                    schema_version: RESULT_SCHEMA_VERSION,
-                    operation: command.operation().to_owned(),
-                    transfer_backend: backend,
-                    status: "ok",
-                    bytes,
-                    checksum_sha256,
-                    paths: TransferPaths {
-                        local_path: Some(redact_local_path(local)),
-                        remote_path: Some(redact_remote_path(remote)),
-                        temporary_remote_path: None,
-                        temporary_local_path: None,
+            if cli.ensure_ssh || cli.restore_ssh {
+                let control_runtime = resolve_control_runtime_config(cli, env, profile.as_ref())
+                    .map_err(|error| Box::new((*error).clone().with_context(context.clone())))?;
+                let mut workflow_backend = LiveWorkflowBackend::new(ssh_runtime, control_runtime);
+                execute_with_ssh_service_guard(
+                    &command,
+                    cli,
+                    &allow_from,
+                    &mut workflow_backend,
+                    &context,
+                    |backend| {
+                        backend
+                            .upload(local, remote, &context)
+                            .map(|(bytes, checksum_sha256)| {
+                                direct_transfer_payload(
+                                    command.operation(),
+                                    backend_name(&backend),
+                                    bytes,
+                                    checksum_sha256,
+                                    Some(redact_local_path(local)),
+                                    Some(redact_remote_path(remote)),
+                                )
+                            })
                     },
-                }
-            })
+                )
+            } else {
+                execute_upload(local, remote, &ssh_runtime, &context).map(
+                    |(bytes, checksum_sha256)| {
+                        direct_transfer_payload(
+                            command.operation(),
+                            &backend,
+                            bytes,
+                            checksum_sha256,
+                            Some(redact_local_path(local)),
+                            Some(redact_remote_path(remote)),
+                        )
+                    },
+                )
+            }
         }
         TransferCommand::FileDownload { remote, local } => {
-            execute_download(remote, local, &ssh_runtime, &context).map(
-                |(bytes, checksum_sha256)| TransferResultPayload {
-                    schema_version: RESULT_SCHEMA_VERSION,
-                    operation: command.operation().to_owned(),
-                    transfer_backend: backend,
-                    status: "ok",
-                    bytes,
-                    checksum_sha256,
-                    paths: TransferPaths {
-                        local_path: Some(redact_local_path(local)),
-                        remote_path: Some(redact_remote_path(remote)),
-                        temporary_remote_path: None,
-                        temporary_local_path: None,
+            if cli.ensure_ssh || cli.restore_ssh {
+                let control_runtime = resolve_control_runtime_config(cli, env, profile.as_ref())
+                    .map_err(|error| Box::new((*error).clone().with_context(context.clone())))?;
+                let mut workflow_backend = LiveWorkflowBackend::new(ssh_runtime, control_runtime);
+                execute_with_ssh_service_guard(
+                    &command,
+                    cli,
+                    &allow_from,
+                    &mut workflow_backend,
+                    &context,
+                    |backend| {
+                        backend
+                            .download(remote, local, &context)
+                            .map(|(bytes, checksum_sha256)| {
+                                direct_transfer_payload(
+                                    command.operation(),
+                                    backend_name(&backend),
+                                    bytes,
+                                    checksum_sha256,
+                                    Some(redact_local_path(local)),
+                                    Some(redact_remote_path(remote)),
+                                )
+                            })
                     },
-                },
-            )
+                )
+            } else {
+                execute_download(remote, local, &ssh_runtime, &context).map(
+                    |(bytes, checksum_sha256)| {
+                        direct_transfer_payload(
+                            command.operation(),
+                            &backend,
+                            bytes,
+                            checksum_sha256,
+                            Some(redact_local_path(local)),
+                            Some(redact_remote_path(remote)),
+                        )
+                    },
+                )
+            }
         }
         TransferCommand::Import { .. }
         | TransferCommand::BackupDownload { .. }
@@ -480,12 +564,52 @@ fn execute_transfer_for_env(
             let control_runtime = resolve_control_runtime_config(cli, env, profile.as_ref())
                 .map_err(|error| Box::new((*error).clone().with_context(context.clone())))?;
             let mut backend = LiveWorkflowBackend::new(ssh_runtime, control_runtime);
-            execute_file_workflow(&command, cli, &mut backend, &context)
+            execute_file_workflow(&command, cli, &allow_from, &mut backend, &context)
         }
     }
 }
 
+fn backend_name<B>(_backend: &B) -> &'static str {
+    DEFAULT_TRANSFER_BACKEND
+}
+
+fn direct_transfer_payload(
+    operation: &str,
+    backend: &str,
+    bytes: u64,
+    checksum_sha256: String,
+    local_path: Option<String>,
+    remote_path: Option<String>,
+) -> TransferResultPayload {
+    TransferResultPayload {
+        schema_version: RESULT_SCHEMA_VERSION,
+        operation: operation.to_owned(),
+        transfer_backend: backend.to_owned(),
+        status: "ok",
+        bytes,
+        checksum_sha256,
+        paths: TransferPaths {
+            local_path,
+            remote_path,
+            temporary_remote_path: None,
+            temporary_local_path: None,
+        },
+    }
+}
+
 fn execute_file_workflow<B: WorkflowBackend>(
+    command: &TransferCommand,
+    cli: &Cli,
+    allow_from: &[String],
+    backend: &mut B,
+    context: &ErrorContext,
+) -> RosWireResult<TransferResultPayload> {
+    execute_with_ssh_service_guard(command, cli, allow_from, backend, context, |backend| {
+        execute_file_workflow_inner(command, cli, backend, context)
+    })
+}
+
+fn execute_file_workflow_inner<B: WorkflowBackend>(
     command: &TransferCommand,
     cli: &Cli,
     backend: &mut B,
@@ -520,6 +644,79 @@ fn execute_file_workflow<B: WorkflowBackend>(
             "direct file upload/download workflows are executed before workflow dispatch"
         ),
     }
+}
+
+fn execute_with_ssh_service_guard<B, F>(
+    _command: &TransferCommand,
+    cli: &Cli,
+    allow_from: &[String],
+    backend: &mut B,
+    context: &ErrorContext,
+    operation: F,
+) -> RosWireResult<TransferResultPayload>
+where
+    B: WorkflowBackend,
+    F: FnOnce(&mut B) -> RosWireResult<TransferResultPayload>,
+{
+    let snapshot = if cli.ensure_ssh || cli.restore_ssh {
+        Some(backend.read_ssh_service(context)?)
+    } else {
+        None
+    };
+
+    if cli.ensure_ssh {
+        let snapshot = snapshot
+            .as_ref()
+            .expect("snapshot is captured whenever ensure_ssh is set");
+        let desired = desired_ssh_service_state(snapshot, allow_from);
+        if &desired != snapshot {
+            backend.apply_ssh_service(&desired, context)?;
+        }
+    }
+
+    let result = operation(backend);
+
+    if cli.restore_ssh {
+        if let Some(snapshot) = &snapshot {
+            let original_error = result.as_ref().err().map(|error| error.message.clone());
+            if let Err(restore_error) = backend.apply_ssh_service(snapshot, context) {
+                return Err(Box::new(
+                    ssh_restore_failed_error(&restore_error, original_error.as_deref())
+                        .with_context(context.clone()),
+                ));
+            }
+        }
+    }
+
+    result
+}
+
+fn desired_ssh_service_state(
+    snapshot: &SshServiceSnapshot,
+    allow_from: &[String],
+) -> SshServiceSnapshot {
+    SshServiceSnapshot {
+        id: snapshot.id.clone(),
+        disabled: false,
+        address: merge_ssh_allow_list(&snapshot.address, allow_from),
+    }
+}
+
+fn ssh_restore_failed_error(
+    restore_error: &RosWireError,
+    original_error: Option<&str>,
+) -> RosWireError {
+    let message = match original_error {
+        Some(original) => format!(
+            "failed to restore RouterOS SSH service state after transfer error `{original}`: {}",
+            restore_error.message
+        ),
+        None => format!(
+            "failed to restore RouterOS SSH service state after successful transfer: {}",
+            restore_error.message
+        ),
+    };
+    RosWireError::ssh_restore_failed(message)
 }
 
 fn execute_import_workflow<B: WorkflowBackend>(
@@ -699,6 +896,28 @@ fn resolve_allow_from(cli: &Cli, env: &BTreeMap<String, String>) -> RosWireResul
     }
 
     Ok(cidrs)
+}
+
+fn resolve_allow_from_for_runtime(
+    cli: &Cli,
+    env: &BTreeMap<String, String>,
+    context: &ErrorContext,
+) -> RosWireResult<Vec<String>> {
+    if !cli.ensure_ssh {
+        return Ok(Vec::new());
+    }
+
+    let allow_from = resolve_allow_from(cli, env)
+        .map_err(|error| Box::new((*error).clone().with_context(context.clone())))?;
+    if allow_from.is_empty() {
+        return Err(Box::new(
+            RosWireError::ssh_whitelist_required(
+                "--ensure-ssh requires at least one allow-from CIDR to merge into /ip service ssh address",
+            )
+            .with_context(context.clone()),
+        ));
+    }
+    Ok(allow_from)
 }
 
 fn validate_safe_cidr(cidr: &str) -> RosWireResult<()> {
@@ -1144,6 +1363,245 @@ fn execute_classic_control<S: ApiStream>(
         .map_err(|error| Box::new((*error).clone().with_context(context)))
 }
 
+fn read_ssh_service(
+    control: &ControlRuntimeConfig,
+    context: ErrorContext,
+) -> RosWireResult<SshServiceSnapshot> {
+    match control.selected_protocol.as_str() {
+        "rest" => read_rest_ssh_service(control, context),
+        "api-ssl" => {
+            let stream =
+                TlsApiStream::connect(&control.host, control.port, Duration::from_secs(10))
+                    .map_err(|error| Box::new((*error).clone().with_context(context.clone())))?;
+            read_classic_ssh_service(stream, control, context)
+        }
+        _ => {
+            let stream =
+                TcpApiStream::connect(&control.host, control.port, Duration::from_secs(10))
+                    .map_err(|error| Box::new((*error).clone().with_context(context.clone())))?;
+            read_classic_ssh_service(stream, control, context)
+        }
+    }
+}
+
+fn apply_ssh_service(
+    control: &ControlRuntimeConfig,
+    desired: &SshServiceSnapshot,
+    context: ErrorContext,
+) -> RosWireResult<()> {
+    match control.selected_protocol.as_str() {
+        "rest" => apply_rest_ssh_service(control, desired, context),
+        "api-ssl" => {
+            let stream =
+                TlsApiStream::connect(&control.host, control.port, Duration::from_secs(10))
+                    .map_err(|error| Box::new((*error).clone().with_context(context.clone())))?;
+            apply_classic_ssh_service(stream, control, desired, context)
+        }
+        _ => {
+            let stream =
+                TcpApiStream::connect(&control.host, control.port, Duration::from_secs(10))
+                    .map_err(|error| Box::new((*error).clone().with_context(context.clone())))?;
+            apply_classic_ssh_service(stream, control, desired, context)
+        }
+    }
+}
+
+fn read_classic_ssh_service<S: ApiStream>(
+    stream: S,
+    control: &ControlRuntimeConfig,
+    context: ErrorContext,
+) -> RosWireResult<SshServiceSnapshot> {
+    let mut session = ClassicApiSession::new(stream);
+    session
+        .login(&control.user, &control.password)
+        .map_err(|error| Box::new((*error).clone().with_context(context.clone())))?;
+    let rows = session
+        .execute_words(&["/ip/service/print".to_owned(), "?name=ssh".to_owned()])
+        .map_err(|error| Box::new((*error).clone().with_context(context.clone())))?;
+    let row = rows.into_iter().next().ok_or_else(|| {
+        Box::new(RosWireError::ros_api_failure(
+            "RouterOS SSH service was not found",
+        ))
+        .with_context(context.clone())
+    })?;
+
+    Ok(ssh_service_snapshot_from_fields(&row))
+}
+
+fn apply_classic_ssh_service<S: ApiStream>(
+    stream: S,
+    control: &ControlRuntimeConfig,
+    desired: &SshServiceSnapshot,
+    context: ErrorContext,
+) -> RosWireResult<()> {
+    let mut session = ClassicApiSession::new(stream);
+    session
+        .login(&control.user, &control.password)
+        .map_err(|error| Box::new((*error).clone().with_context(context.clone())))?;
+
+    let mut words = vec!["/ip/service/set".to_owned()];
+    if let Some(id) = &desired.id {
+        words.push(format!("=.id={id}"));
+    } else {
+        words.push("=numbers=ssh".to_owned());
+    }
+    words.push(format!("=disabled={}", routeros_bool(desired.disabled)));
+    words.push(format!("=address={}", desired.address.join(",")));
+
+    session
+        .execute_words(&words)
+        .map(|_| ())
+        .map_err(|error| Box::new((*error).clone().with_context(context)))
+}
+
+fn read_rest_ssh_service(
+    control: &ControlRuntimeConfig,
+    context: ErrorContext,
+) -> RosWireResult<SshServiceSnapshot> {
+    let client = RestClient::https(
+        &control.host,
+        control.port,
+        &control.user,
+        &control.password,
+    );
+    let value = client
+        .get("/rest/ip/service")
+        .map_err(|error| Box::new((*error).clone().with_context(context.clone())))?;
+    ssh_service_snapshot_from_json(&value).map_err(|error| Box::new((*error).with_context(context)))
+}
+
+fn apply_rest_ssh_service(
+    control: &ControlRuntimeConfig,
+    desired: &SshServiceSnapshot,
+    context: ErrorContext,
+) -> RosWireResult<()> {
+    let id = desired.id.as_deref().unwrap_or("ssh");
+    let client = RestClient::https(
+        &control.host,
+        control.port,
+        &control.user,
+        &control.password,
+    );
+    client
+        .patch_json(
+            &format!("/rest/ip/service/{id}"),
+            json!({
+                "disabled": routeros_bool(desired.disabled),
+                "address": desired.address.join(","),
+            }),
+        )
+        .map(|_| ())
+        .map_err(|error| Box::new((*error).clone().with_context(context)))
+}
+
+fn ssh_service_snapshot_from_fields(fields: &BTreeMap<String, String>) -> SshServiceSnapshot {
+    SshServiceSnapshot {
+        id: fields
+            .get(".id")
+            .cloned()
+            .or_else(|| fields.get("id").cloned())
+            .or_else(|| Some("ssh".to_owned())),
+        disabled: fields
+            .get("disabled")
+            .is_some_and(|value| routeros_bool_is_true(value)),
+        address: fields
+            .get("address")
+            .map(|value| parse_address_list(value))
+            .unwrap_or_default(),
+    }
+}
+
+fn ssh_service_snapshot_from_json(value: &Value) -> RosWireResult<SshServiceSnapshot> {
+    let entry = match value {
+        Value::Array(items) => items
+            .iter()
+            .find(|item| {
+                value_string(item.get("name").unwrap_or(&Value::Null)).as_deref() == Some("ssh")
+            })
+            .ok_or_else(|| {
+                Box::new(RosWireError::ros_api_failure(
+                    "RouterOS SSH service was not found",
+                ))
+            })?,
+        Value::Object(_) => value,
+        _ => {
+            return Err(Box::new(RosWireError::ros_api_failure(
+                "RouterOS SSH service response has unexpected shape",
+            )))
+        }
+    };
+    let object = entry.as_object().ok_or_else(|| {
+        Box::new(RosWireError::ros_api_failure(
+            "RouterOS SSH service response item has unexpected shape",
+        ))
+    })?;
+
+    Ok(SshServiceSnapshot {
+        id: object
+            .get(".id")
+            .and_then(value_string)
+            .or_else(|| object.get("id").and_then(value_string))
+            .or_else(|| Some("ssh".to_owned())),
+        disabled: object
+            .get("disabled")
+            .and_then(value_string)
+            .is_some_and(|value| routeros_bool_is_true(&value)),
+        address: object
+            .get("address")
+            .and_then(value_string)
+            .map(|value| parse_address_list(&value))
+            .unwrap_or_default(),
+    })
+}
+
+fn value_string(value: &Value) -> Option<String> {
+    match value {
+        Value::String(value) => Some(value.clone()),
+        Value::Bool(true) => Some("yes".to_owned()),
+        Value::Bool(false) => Some("no".to_owned()),
+        Value::Number(value) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn parse_address_list(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+fn routeros_bool(value: bool) -> &'static str {
+    if value {
+        "yes"
+    } else {
+        "no"
+    }
+}
+
+fn routeros_bool_is_true(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "yes" | "true" | "1"
+    )
+}
+
+fn merge_ssh_allow_list(existing: &[String], allow_from: &[String]) -> Vec<String> {
+    let mut merged = if existing.is_empty() {
+        Vec::new()
+    } else {
+        existing.to_vec()
+    };
+    for cidr in allow_from {
+        if !merged.iter().any(|item| item == cidr) {
+            merged.push(cidr.clone());
+        }
+    }
+    merged
+}
+
 fn selected_context(context: &ErrorContext, selected_protocol: &str) -> ErrorContext {
     let mut context = context.clone();
     context.selected_protocol = selected_protocol.to_owned();
@@ -1415,22 +1873,34 @@ fn plan_steps(command: &TransferCommand, cli: &Cli) -> Vec<TransferStep> {
         TransferStep {
             order: 2,
             action: "verify-ssh-whitelist".to_owned(),
-            description: "Use allow-from CIDR as the only planned SSH client whitelist".to_owned(),
+            description: "Validate allow-from CIDR values before merging with existing RouterOS SSH service address list".to_owned(),
             dry_run_side_effects: "none",
         },
     ];
 
-    if cli.ensure_ssh {
+    if cli.ensure_ssh || cli.restore_ssh {
         steps.push(TransferStep {
             order: 3,
-            action: "ensure-ssh-service".to_owned(),
-            description: "Plan RouterOS /ip service ssh enable/address update before transfer"
-                .to_owned(),
+            action: "snapshot-ssh-service".to_owned(),
+            description: "Read /ip service ssh disabled/address state before transfer".to_owned(),
             dry_run_side_effects: "none",
         });
     }
 
-    let transfer_order = if cli.ensure_ssh { 4 } else { 3 };
+    if cli.ensure_ssh {
+        steps.push(TransferStep {
+            order: 4,
+            action: "ensure-ssh-service".to_owned(),
+            description: "Enable RouterOS SSH service if needed and append/merge allow-from into the existing address whitelist".to_owned(),
+            dry_run_side_effects: "none",
+        });
+    }
+
+    let transfer_order = match (cli.ensure_ssh, cli.restore_ssh) {
+        (true, _) => 5,
+        (false, true) => 4,
+        (false, false) => 3,
+    };
     steps.push(TransferStep {
         order: transfer_order,
         action: command.operation().to_owned(),
@@ -1453,7 +1923,7 @@ fn plan_steps(command: &TransferCommand, cli: &Cli) -> Vec<TransferStep> {
         steps.push(TransferStep {
             order: next_order,
             action: "restore-ssh-service".to_owned(),
-            description: "Restore RouterOS SSH service state captured before ensure-ssh".to_owned(),
+            description: "Best-effort restore of captured SSH service state on success or ordinary errors; process interrupts are not trapped in this release".to_owned(),
             dry_run_side_effects: "none",
         });
     }
@@ -1593,11 +2063,12 @@ fn read_env_map() -> BTreeMap<String, String> {
 mod tests {
     use super::{
         build_plan_for_env, copy_with_sha256, execute_classic_control, execute_file_workflow,
-        handle_transfer_for_env, host_key_matches, load_selected_profile, parse_port,
-        parse_transfer_command, resolve_control_runtime_config, resolve_ssh_runtime_config,
-        resolve_transfer_backend, selected_context, sha256_fingerprint, validate_safe_cidr,
-        ControlCommand, ControlRuntimeConfig, LiveWorkflowBackend, SshRuntimeConfig,
-        TransferCommand, WorkflowBackend, MAX_TRANSFER_BYTES,
+        handle_transfer_for_env, host_key_matches, load_selected_profile, merge_ssh_allow_list,
+        parse_port, parse_transfer_command, resolve_control_runtime_config,
+        resolve_ssh_runtime_config, resolve_transfer_backend, routeros_bool, selected_context,
+        sha256_fingerprint, ssh_service_snapshot_from_fields, ssh_service_snapshot_from_json,
+        validate_safe_cidr, ControlCommand, ControlRuntimeConfig, LiveWorkflowBackend,
+        SshRuntimeConfig, SshServiceSnapshot, TransferCommand, WorkflowBackend, MAX_TRANSFER_BYTES,
     };
     use crate::args::Cli;
     use crate::error::{ErrorCode, ErrorContext};
@@ -1658,6 +2129,62 @@ mod tests {
             .steps
             .iter()
             .all(|step| step.dry_run_side_effects == "none"));
+        assert!(plan
+            .steps
+            .iter()
+            .any(|step| step.action == "snapshot-ssh-service"));
+        assert!(plan
+            .steps
+            .iter()
+            .any(|step| step.description.contains("append/merge allow-from")));
+        assert!(plan.steps.iter().any(|step| step
+            .description
+            .contains("process interrupts are not trapped")));
+    }
+
+    #[test]
+    fn ssh_service_snapshots_parse_classic_and_rest_shapes() {
+        let classic = BTreeMap::from([
+            (".id".to_owned(), "*A".to_owned()),
+            ("disabled".to_owned(), "yes".to_owned()),
+            (
+                "address".to_owned(),
+                "198.51.100.4/32, 203.0.113.10/32".to_owned(),
+            ),
+        ]);
+
+        let snapshot = ssh_service_snapshot_from_fields(&classic);
+
+        assert_eq!(snapshot.id.as_deref(), Some("*A"));
+        assert!(snapshot.disabled);
+        assert_eq!(snapshot.address, vec!["198.51.100.4/32", "203.0.113.10/32"]);
+
+        let rest = serde_json::json!([
+            { "name": "www", "disabled": "no" },
+            { ".id": "*B", "name": "ssh", "disabled": false, "address": "203.0.113.10/32" }
+        ]);
+        let snapshot = ssh_service_snapshot_from_json(&rest).expect("rest snapshot should parse");
+
+        assert_eq!(snapshot.id.as_deref(), Some("*B"));
+        assert!(!snapshot.disabled);
+        assert_eq!(snapshot.address, vec!["203.0.113.10/32"]);
+    }
+
+    #[test]
+    fn ssh_allow_list_merge_preserves_existing_restrictions() {
+        let existing = vec!["198.51.100.4/32".to_owned(), "203.0.113.10/32".to_owned()];
+        let additions = vec!["203.0.113.10/32".to_owned(), "203.0.113.11/32".to_owned()];
+
+        let merged = merge_ssh_allow_list(&existing, &additions);
+
+        assert_eq!(
+            merged,
+            vec!["198.51.100.4/32", "203.0.113.10/32", "203.0.113.11/32"]
+        );
+        assert_eq!(
+            merge_ssh_allow_list(&[], &["203.0.113.10/32".to_owned()]),
+            vec!["203.0.113.10/32"]
+        );
     }
 
     #[test]
@@ -2042,6 +2569,40 @@ target = "password"
     }
 
     #[test]
+    fn runtime_ensure_ssh_requires_allow_from_before_connecting() {
+        let cli = Cli::try_parse_from([
+            "roswire",
+            "--host",
+            "198.51.100.10",
+            "--user",
+            "api-user",
+            "--password",
+            "api-secret",
+            "--ssh-user",
+            "ssh-user",
+            "--ssh-password",
+            "ssh-secret",
+            "--ssh-host-key",
+            "SHA256:test",
+            "file",
+            "upload",
+            "setup.rsc",
+            "flash/setup.rsc",
+            "--ensure-ssh",
+        ])
+        .expect("cli should parse");
+        let command = parse_transfer_command(&cli.tokens)
+            .expect("transfer command should be detected")
+            .expect("transfer command should parse");
+
+        let error = handle_transfer_for_env(command, &cli, &isolated_env())
+            .expect_err("ensure-ssh should require allow-from");
+
+        assert_eq!(error.error_code, ErrorCode::SshWhitelistRequired);
+        assert!(error.message.contains("--ensure-ssh requires"));
+    }
+
+    #[test]
     fn runtime_upload_rejects_large_file_before_connecting() {
         let temp = tempfile::tempdir().expect("temp dir should be created");
         let local = temp.path().join("large.rsc");
@@ -2239,9 +2800,14 @@ target = "password"
             .expect("transfer command should parse");
         let mut backend = FakeWorkflowBackend::default();
 
-        let payload =
-            execute_file_workflow(&command, &cli, &mut backend, &workflow_context("import"))
-                .expect("workflow should succeed");
+        let payload = execute_file_workflow(
+            &command,
+            &cli,
+            &[],
+            &mut backend,
+            &workflow_context("import"),
+        )
+        .expect("workflow should succeed");
 
         assert_eq!(payload.operation, "import.plan");
         assert_eq!(payload.bytes, 11);
@@ -2265,6 +2831,110 @@ target = "password"
     }
 
     #[test]
+    fn workflow_ensure_ssh_merges_allow_from_and_restore_snapshot() {
+        let cli = Cli::try_parse_from([
+            "roswire",
+            "import",
+            "/Users/example/setup.rsc",
+            "--ensure-ssh",
+            "--restore-ssh",
+        ])
+        .expect("cli should parse");
+        let command = parse_transfer_command(&cli.tokens)
+            .expect("transfer command should be detected")
+            .expect("transfer command should parse");
+        let mut backend = FakeWorkflowBackend {
+            ssh_snapshot: SshServiceSnapshot {
+                id: Some("*A".to_owned()),
+                disabled: true,
+                address: vec!["198.51.100.4/32".to_owned()],
+            },
+            ..FakeWorkflowBackend::default()
+        };
+
+        let payload = execute_file_workflow(
+            &command,
+            &cli,
+            &["203.0.113.10/32".to_owned()],
+            &mut backend,
+            &workflow_context("import"),
+        )
+        .expect("workflow should succeed and restore SSH service");
+
+        assert_eq!(payload.operation, "import.plan");
+        assert_eq!(
+            backend.events,
+            vec![
+                "snapshot-ssh",
+                "set-ssh:disabled=no address=198.51.100.4/32,203.0.113.10/32",
+                "upload:/Users/example/setup.rsc->flash/roswire-import-setup.rsc.roswire.tmp",
+                "control:/import =file-name=flash/roswire-import-setup.rsc.roswire.tmp",
+                "set-ssh:disabled=yes address=198.51.100.4/32",
+            ]
+        );
+    }
+
+    #[test]
+    fn workflow_restore_failure_returns_structured_restore_error() {
+        let cli = Cli::try_parse_from(["roswire", "import", "setup.rsc", "--restore-ssh"])
+            .expect("cli should parse");
+        let command = parse_transfer_command(&cli.tokens)
+            .expect("transfer command should be detected")
+            .expect("transfer command should parse");
+        let mut backend = FakeWorkflowBackend {
+            fail_ssh_apply_on: Some(1),
+            ..FakeWorkflowBackend::default()
+        };
+
+        let error = execute_file_workflow(
+            &command,
+            &cli,
+            &[],
+            &mut backend,
+            &workflow_context("import"),
+        )
+        .expect_err("restore failure should be surfaced");
+
+        assert_eq!(error.error_code, ErrorCode::SshRestoreFailed);
+        assert!(error.message.contains("after successful transfer"));
+    }
+
+    #[test]
+    fn workflow_operation_failure_still_attempts_restore() {
+        let cli = Cli::try_parse_from([
+            "roswire",
+            "backup",
+            "download",
+            "backup.backup",
+            "--ensure-ssh",
+            "--restore-ssh",
+        ])
+        .expect("cli should parse");
+        let command = parse_transfer_command(&cli.tokens)
+            .expect("transfer command should be detected")
+            .expect("transfer command should parse");
+        let mut backend = FakeWorkflowBackend {
+            fail_wait: true,
+            ..FakeWorkflowBackend::default()
+        };
+
+        let error = execute_file_workflow(
+            &command,
+            &cli,
+            &["203.0.113.10/32".to_owned()],
+            &mut backend,
+            &workflow_context("backup/download"),
+        )
+        .expect_err("workflow should return the original operation error after restore succeeds");
+
+        assert_eq!(error.error_code, ErrorCode::RosApiFailure);
+        assert!(backend
+            .events
+            .iter()
+            .any(|event| event == "set-ssh:disabled=no address=203.0.113.10/32"));
+    }
+
+    #[test]
     fn backup_workflow_generates_waits_downloads_finalizes_and_cleans() {
         let cli = Cli::try_parse_from([
             "roswire",
@@ -2284,6 +2954,7 @@ target = "password"
         let payload = execute_file_workflow(
             &command,
             &cli,
+            &[],
             &mut backend,
             &workflow_context("backup/download"),
         )
@@ -2319,6 +2990,7 @@ target = "password"
         let payload = execute_file_workflow(
             &command,
             &cli,
+            &[],
             &mut backend,
             &workflow_context("export/download"),
         )
@@ -2350,6 +3022,7 @@ target = "password"
         let error = execute_file_workflow(
             &command,
             &cli,
+            &[],
             &mut backend,
             &workflow_context("backup/download"),
         )
@@ -2372,9 +3045,14 @@ target = "password"
             ..FakeWorkflowBackend::default()
         };
 
-        let error =
-            execute_file_workflow(&command, &cli, &mut backend, &workflow_context("import"))
-                .expect_err("cleanup failure should fail the workflow");
+        let error = execute_file_workflow(
+            &command,
+            &cli,
+            &[],
+            &mut backend,
+            &workflow_context("import"),
+        )
+        .expect_err("cleanup failure should fail the workflow");
 
         assert_eq!(error.error_code, ErrorCode::FileTransferFailed);
         assert!(error.message.contains("cleanup failed"));
@@ -2670,9 +3348,40 @@ value = "profile-secret"
         events: Vec<String>,
         fail_wait: bool,
         fail_remove: bool,
+        ssh_snapshot: SshServiceSnapshot,
+        ssh_apply_count: usize,
+        fail_ssh_apply_on: Option<usize>,
     }
 
     impl WorkflowBackend for FakeWorkflowBackend {
+        fn read_ssh_service(
+            &mut self,
+            _context: &ErrorContext,
+        ) -> crate::error::RosWireResult<SshServiceSnapshot> {
+            self.events.push("snapshot-ssh".to_owned());
+            Ok(self.ssh_snapshot.clone())
+        }
+
+        fn apply_ssh_service(
+            &mut self,
+            desired: &SshServiceSnapshot,
+            context: &ErrorContext,
+        ) -> crate::error::RosWireResult<()> {
+            self.ssh_apply_count += 1;
+            self.events.push(format!(
+                "set-ssh:disabled={} address={}",
+                routeros_bool(desired.disabled),
+                desired.address.join(",")
+            ));
+            if self.fail_ssh_apply_on == Some(self.ssh_apply_count) {
+                return Err(Box::new(
+                    crate::error::RosWireError::ros_api_failure("ssh service set failed")
+                        .with_context(context.clone()),
+                ));
+            }
+            Ok(())
+        }
+
         fn upload(
             &mut self,
             local: &str,

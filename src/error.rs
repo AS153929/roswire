@@ -25,6 +25,7 @@ pub enum ErrorCode {
     SshHostKeyMismatch,
     SshWhitelistRequired,
     SshWhitelistUnsafe,
+    SshRestoreFailed,
     FileTooLarge,
     FileTransferFailed,
     InternalError,
@@ -202,6 +203,18 @@ impl RosWireError {
             ),
             context: ErrorContext::default(),
             exit_code: 2,
+        }
+    }
+
+    pub fn ssh_restore_failed(message: impl Into<String>) -> Self {
+        Self {
+            error_code: ErrorCode::SshRestoreFailed,
+            message: message.into(),
+            hint: Some(
+                "inspect `/ip service ssh` manually and restore the pre-transfer address/disabled state".to_owned(),
+            ),
+            context: ErrorContext::default(),
+            exit_code: 6,
         }
     }
 
@@ -526,6 +539,10 @@ mod tests {
         let unsafe_whitelist = RosWireError::ssh_whitelist_unsafe("allow-from too wide");
         assert_eq!(unsafe_whitelist.error_code, ErrorCode::SshWhitelistUnsafe);
         assert_eq!(unsafe_whitelist.exit_code(), 2);
+
+        let restore_failed = RosWireError::ssh_restore_failed("restore failed");
+        assert_eq!(restore_failed.error_code, ErrorCode::SshRestoreFailed);
+        assert_eq!(restore_failed.exit_code(), 6);
 
         let too_large = RosWireError::file_too_large("too large");
         assert_eq!(too_large.error_code, ErrorCode::FileTooLarge);

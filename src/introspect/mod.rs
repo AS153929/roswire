@@ -250,6 +250,21 @@ fn explain_error_payload(tokens: &[String]) -> RosWireResult<String> {
                 "run `roswire commands --json` for command discovery".to_owned(),
             ],
         },
+        "SSH_RESTORE_FAILED" => ExplainErrorPayload {
+            schema_version: "roswire.error.explain.v1",
+            error_code: code,
+            summary:
+                "RosWire could not restore the RouterOS SSH service state captured before transfer."
+                    .to_owned(),
+            common_causes: vec![
+                "RouterOS rejected /ip service ssh restore fields".to_owned(),
+                "control protocol connection failed during cleanup".to_owned(),
+            ],
+            suggested_next_steps: vec![
+                "inspect `/ip service print where name=ssh` on the router".to_owned(),
+                "restore the intended disabled/address values manually before retrying".to_owned(),
+            ],
+        },
         _ => {
             return Err(Box::new(RosWireError::help_topic_not_found(format!(
                 "error code {code}",
