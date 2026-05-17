@@ -40,6 +40,9 @@ pub struct ProfileConfig {
     pub routeros_version: Option<String>,
     pub transfer: Option<String>,
     pub port: Option<u16>,
+    pub ssh_port: Option<u16>,
+    pub ssh_user: Option<String>,
+    pub ssh_key: Option<String>,
     #[serde(default)]
     pub allow_plain_secrets: bool,
     #[serde(default)]
@@ -570,6 +573,42 @@ pub fn inspect_config(
         None,
     );
 
+    let ssh_port_cli = cli.ssh_port.map(|value| value.to_string());
+    let ssh_port_profile = profile.ssh_port.map(|value| value.to_string());
+    insert_resolved_field(
+        &mut resolved,
+        "ssh_port",
+        ssh_port_cli.as_deref(),
+        env.get("ROS_SSH_PORT").map(String::as_str),
+        ssh_port_profile.as_deref(),
+        Some("22"),
+    );
+    insert_resolved_field(
+        &mut resolved,
+        "ssh_user",
+        cli.ssh_user.as_deref(),
+        env.get("ROS_SSH_USER").map(String::as_str),
+        profile.ssh_user.as_deref(),
+        None,
+    );
+    let ssh_key_cli = cli.ssh_key.as_deref().map(redact_local_path_for_inspect);
+    let ssh_key_env = env
+        .get("ROS_SSH_KEY")
+        .map(String::as_str)
+        .map(redact_local_path_for_inspect);
+    let ssh_key_profile = profile
+        .ssh_key
+        .as_deref()
+        .map(redact_local_path_for_inspect);
+    insert_resolved_field(
+        &mut resolved,
+        "ssh_key",
+        ssh_key_cli.as_deref(),
+        ssh_key_env.as_deref(),
+        ssh_key_profile.as_deref(),
+        None,
+    );
+
     Ok(ConfigInspect {
         schema_version: "roswire.config.inspect.v1".to_owned(),
         active_profile,
@@ -810,6 +849,18 @@ fn handle_config_device(tokens: &[String]) -> RosWireResult<String> {
             "port" => {
                 profile.port = Some(parse_port(&value)?);
                 updated_fields.push("port".to_owned());
+            }
+            "ssh_port" | "ssh-port" => {
+                profile.ssh_port = Some(parse_port(&value)?);
+                updated_fields.push("ssh_port".to_owned());
+            }
+            "ssh_user" | "ssh-user" => {
+                profile.ssh_user = Some(value);
+                updated_fields.push("ssh_user".to_owned());
+            }
+            "ssh_key" | "ssh-key" => {
+                profile.ssh_key = Some(value);
+                updated_fields.push("ssh_key".to_owned());
             }
             _ => {
                 return Err(Box::new(RosWireError::usage(format!(
@@ -1111,6 +1162,20 @@ fn parse_port(value: &str) -> RosWireResult<u16> {
             "invalid port value `{value}`: {error}",
         )))
     })
+}
+
+fn redact_local_path_for_inspect(path: &str) -> String {
+    let path_ref = Path::new(path);
+    if path_ref.is_absolute() {
+        let file_name = path_ref
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+            .unwrap_or("ssh-key");
+        format!("***REDACTED***/{file_name}")
+    } else {
+        path.to_owned()
+    }
 }
 
 fn ensure_home_layout(paths: &ConfigPaths) -> RosWireResult<(bool, bool)> {

@@ -74,9 +74,19 @@ pub struct TransferPlan {
 pub struct TransferPreconditions {
     pub device_access: &'static str,
     pub ssh_host_key: &'static str,
+    pub ssh: SshTransferSummary,
     pub allow_from: Vec<String>,
     pub ensure_ssh: bool,
     pub restore_ssh: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct SshTransferSummary {
+    pub port: u16,
+    pub user: String,
+    pub auth_method: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -212,7 +222,10 @@ fn build_plan_for_env(
         ));
     }
 
-    Ok(plan_from_command(command, backend, allow_from, cli))
+    let profile = load_selected_profile(cli, env)?;
+    let ssh = resolve_ssh_transfer_summary(cli, env, profile.as_ref())?;
+
+    Ok(plan_from_command(command, backend, allow_from, ssh, cli))
 }
 
 fn resolve_transfer_backend(cli: &Cli, env: &BTreeMap<String, String>) -> RosWireResult<String> {
@@ -290,6 +303,7 @@ fn plan_from_command(
     command: TransferCommand,
     backend: String,
     allow_from: Vec<String>,
+    ssh: SshTransferSummary,
     cli: &Cli,
 ) -> TransferPlan {
     let mut cleanup_remote_paths = Vec::new();
@@ -375,6 +389,7 @@ fn plan_from_command(
         preconditions: TransferPreconditions {
             device_access: "none",
             ssh_host_key: "provided",
+            ssh,
             allow_from,
             ensure_ssh: cli.ensure_ssh,
             restore_ssh: cli.restore_ssh,
@@ -392,6 +407,87 @@ fn plan_from_command(
         steps: plan_steps(&command, cli),
         paths,
     }
+}
+
+fn load_selected_profile(
+    cli: &Cli,
+    env: &BTreeMap<String, String>,
+) -> RosWireResult<Option<config::ProfileConfig>> {
+    let paths = config::ConfigPaths::from_home(config::resolve_home_path(
+        env.get("ROSWIRE_HOME").map(String::as_str),
+    ));
+    if !paths.config.exists() {
+        return Ok(None);
+    }
+
+    config::ensure_secure_directory_permissions(&paths.home)?;
+    config::ensure_secure_file_permissions(&paths.config)?;
+    let config_file = config::load_config_file(&paths.config)?;
+    let profile_name = config::select_active_profile(
+        cli.profile.as_deref(),
+        env.get("ROS_PROFILE").map(String::as_str),
+        &config_file,
+    )?;
+    Ok(config_file.profiles.get(&profile_name).cloned())
+}
+
+fn resolve_ssh_transfer_summary(
+    cli: &Cli,
+    env: &BTreeMap<String, String>,
+    profile: Option<&config::ProfileConfig>,
+) -> RosWireResult<SshTransferSummary> {
+    let port = match cli
+        .ssh_port
+        .map(Ok)
+        .or_else(|| env.get("ROS_SSH_PORT").map(|value| parse_port(value)))
+        .or_else(|| profile.and_then(|profile| profile.ssh_port.map(Ok)))
+    {
+        Some(port) => port?,
+        None => 22,
+    };
+
+    let user = cli
+        .ssh_user
+        .clone()
+        .or_else(|| env.get("ROS_SSH_USER").cloned())
+        .or_else(|| profile.and_then(|profile| profile.ssh_user.clone()))
+        .or_else(|| cli.user.clone())
+        .or_else(|| env.get("ROS_USER").cloned())
+        .or_else(|| profile.and_then(|profile| profile.user.clone()))
+        .unwrap_or_else(|| "reuse-api-user".to_owned());
+
+    let key_path = cli
+        .ssh_key
+        .clone()
+        .or_else(|| env.get("ROS_SSH_KEY").cloned())
+        .or_else(|| profile.and_then(|profile| profile.ssh_key.clone()))
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| redact_local_path(&value));
+    let auth_method = if key_path.is_some() {
+        "key".to_owned()
+    } else if cli.ssh_password.is_some()
+        || env.get("ROS_SSH_PASSWORD").is_some()
+        || profile.is_some_and(|profile| profile.secrets.contains_key("ssh_password"))
+    {
+        "password".to_owned()
+    } else {
+        "password-reuses-api".to_owned()
+    };
+
+    Ok(SshTransferSummary {
+        port,
+        user,
+        auth_method,
+        key_path,
+    })
+}
+
+fn parse_port(value: &str) -> RosWireResult<u16> {
+    value.parse::<u16>().map_err(|error| {
+        Box::new(RosWireError::usage(format!(
+            "invalid SSH port value `{value}`: {error}",
+        )))
+    })
 }
 
 fn plan_steps(command: &TransferCommand, cli: &Cli) -> Vec<TransferStep> {
@@ -582,6 +678,7 @@ mod tests {
     use crate::error::ErrorCode;
     use clap::Parser;
     use std::collections::BTreeMap;
+    use std::fs;
 
     #[test]
     fn file_upload_plan_contains_safe_preconditions_and_paths() {
@@ -605,12 +702,15 @@ mod tests {
             .expect("transfer command should be detected")
             .expect("transfer command should parse");
 
-        let plan = build_plan_for_env(command, &cli, &BTreeMap::new()).expect("plan should build");
+        let plan = build_plan_for_env(command, &cli, &isolated_env()).expect("plan should build");
 
         assert_eq!(plan.schema_version, "roswire.transfer.plan.v1");
         assert_eq!(plan.operation, "file.upload");
         assert!(plan.dry_run);
         assert_eq!(plan.preconditions.ssh_host_key, "provided");
+        assert_eq!(plan.preconditions.ssh.port, 22);
+        assert_eq!(plan.preconditions.ssh.user, "reuse-api-user");
+        assert_eq!(plan.preconditions.ssh.auth_method, "password-reuses-api");
         assert_eq!(plan.preconditions.allow_from, vec!["203.0.113.10/32"]);
         assert_eq!(
             plan.paths.local_path.as_deref(),
@@ -650,7 +750,7 @@ mod tests {
             .expect("transfer command should be detected")
             .expect("transfer command should parse");
 
-        let plan = build_plan_for_env(command, &cli, &BTreeMap::new()).expect("plan should build");
+        let plan = build_plan_for_env(command, &cli, &isolated_env()).expect("plan should build");
 
         assert_eq!(plan.operation, "import.plan");
         assert_eq!(
@@ -661,6 +761,120 @@ mod tests {
             .steps
             .iter()
             .any(|step| step.description.contains("/import")));
+    }
+
+    #[test]
+    fn ssh_transfer_summary_prefers_cli_then_env_then_profile_and_redacts_key_path() {
+        let temp = tempfile::tempdir().expect("temp dir should be created");
+        write_config(
+            temp.path(),
+            r#"
+version = 1
+default_profile = "studio"
+
+[profiles.studio]
+host = "198.51.100.10"
+user = "api-profile"
+ssh_port = 2200
+ssh_user = "profile-ssh"
+ssh_key = "/Users/profile/.ssh/id_profile"
+
+[profiles.studio.secrets.ssh_password]
+type = "same-as"
+target = "password"
+"#,
+        );
+        let cli = Cli::try_parse_from([
+            "roswire",
+            "file",
+            "download",
+            "flash/setup.rsc",
+            "setup.rsc",
+            "--dry-run",
+            "--ssh-host-key",
+            "SHA256:test",
+            "--ssh-port",
+            "2022",
+            "--ssh-user",
+            "cli-ssh",
+            "--ssh-key",
+            "/Users/cli/.ssh/id_cli",
+            "--allow-from",
+            "203.0.113.10/32",
+        ])
+        .expect("cli should parse");
+        let command = parse_transfer_command(&cli.tokens)
+            .expect("transfer command should be detected")
+            .expect("transfer command should parse");
+        let env = BTreeMap::from([
+            ("ROSWIRE_HOME".to_owned(), temp.path().display().to_string()),
+            ("ROS_SSH_PORT".to_owned(), "2222".to_owned()),
+            ("ROS_SSH_USER".to_owned(), "env-ssh".to_owned()),
+            (
+                "ROS_SSH_KEY".to_owned(),
+                "/Users/env/.ssh/id_env".to_owned(),
+            ),
+        ]);
+
+        let plan = build_plan_for_env(command, &cli, &env).expect("plan should build");
+
+        assert_eq!(plan.preconditions.ssh.port, 2022);
+        assert_eq!(plan.preconditions.ssh.user, "cli-ssh");
+        assert_eq!(plan.preconditions.ssh.auth_method, "key");
+        assert_eq!(
+            plan.preconditions.ssh.key_path.as_deref(),
+            Some("***REDACTED***/id_cli"),
+        );
+    }
+
+    #[test]
+    fn ssh_transfer_summary_uses_env_then_profile_fallbacks() {
+        let temp = tempfile::tempdir().expect("temp dir should be created");
+        write_config(
+            temp.path(),
+            r#"
+version = 1
+default_profile = "studio"
+
+[profiles.studio]
+host = "198.51.100.10"
+user = "api-profile"
+ssh_port = 2200
+ssh_user = "profile-ssh"
+
+[profiles.studio.secrets.ssh_password]
+type = "same-as"
+target = "password"
+"#,
+        );
+        let cli = Cli::try_parse_from([
+            "roswire",
+            "file",
+            "download",
+            "flash/setup.rsc",
+            "setup.rsc",
+            "--dry-run",
+            "--ssh-host-key",
+            "SHA256:test",
+            "--allow-from",
+            "203.0.113.10/32",
+        ])
+        .expect("cli should parse");
+        let command = parse_transfer_command(&cli.tokens)
+            .expect("transfer command should be detected")
+            .expect("transfer command should parse");
+        let env = BTreeMap::from([
+            ("ROSWIRE_HOME".to_owned(), temp.path().display().to_string()),
+            ("ROS_SSH_USER".to_owned(), "env-ssh".to_owned()),
+            ("ROS_SSH_PASSWORD".to_owned(), "env-secret".to_owned()),
+        ]);
+
+        let plan = build_plan_for_env(command, &cli, &env).expect("plan should build");
+
+        assert_eq!(plan.preconditions.ssh.port, 2200);
+        assert_eq!(plan.preconditions.ssh.user, "env-ssh");
+        assert_eq!(plan.preconditions.ssh.auth_method, "password");
+        assert_eq!(plan.preconditions.ssh.key_path, None);
     }
 
     #[test]
@@ -741,7 +955,7 @@ mod tests {
             .expect("transfer command should be detected")
             .expect("transfer command should parse");
 
-        let error = build_plan_for_env(command, &cli, &BTreeMap::new())
+        let error = build_plan_for_env(command, &cli, &isolated_env())
             .expect_err("host key should be required");
 
         assert_eq!(error.error_code, ErrorCode::SshHostKeyRequired);
@@ -766,7 +980,7 @@ mod tests {
             .expect("transfer command should be detected")
             .expect("transfer command should parse");
 
-        let error = build_plan_for_env(command, &cli, &BTreeMap::new())
+        let error = build_plan_for_env(command, &cli, &isolated_env())
             .expect_err("allow-from should be required");
 
         assert_eq!(error.error_code, ErrorCode::SshWhitelistRequired);
@@ -791,7 +1005,7 @@ mod tests {
             .expect("transfer command should be detected")
             .expect("transfer command should parse");
 
-        let error = build_plan_for_env(command, &cli, &BTreeMap::new())
+        let error = build_plan_for_env(command, &cli, &isolated_env())
             .expect_err("wide allow-from should fail");
 
         assert_eq!(error.error_code, ErrorCode::SshWhitelistUnsafe);
@@ -825,5 +1039,25 @@ mod tests {
 
         assert_eq!(command.command_name(), "file/upload");
         assert_eq!(command.operation(), "file.upload");
+    }
+
+    fn write_config(home: &std::path::Path, contents: &str) {
+        fs::write(home.join("config.toml"), contents).expect("config should be written");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(home, fs::Permissions::from_mode(0o700))
+                .expect("home permissions should be set");
+            fs::set_permissions(home.join("config.toml"), fs::Permissions::from_mode(0o600))
+                .expect("config permissions should be set");
+        }
+    }
+
+    fn isolated_env() -> BTreeMap<String, String> {
+        let temp = tempfile::tempdir().expect("temp dir should be created");
+        BTreeMap::from([(
+            "ROSWIRE_HOME".to_owned(),
+            temp.path().join("missing-home").display().to_string(),
+        )])
     }
 }

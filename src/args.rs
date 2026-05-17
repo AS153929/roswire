@@ -118,6 +118,22 @@ pub struct Cli {
     #[arg(long = "ssh-host-key")]
     pub ssh_host_key: Option<String>,
 
+    /// RouterOS SSH service port for transfer workflows.
+    #[arg(long = "ssh-port")]
+    pub ssh_port: Option<u16>,
+
+    /// SSH username for transfer workflows; defaults to RouterOS API user.
+    #[arg(long = "ssh-user")]
+    pub ssh_user: Option<String>,
+
+    /// SSH password for transfer workflows; defaults to RouterOS API password.
+    #[arg(long = "ssh-password")]
+    pub ssh_password: Option<String>,
+
+    /// SSH private key path for transfer workflows.
+    #[arg(long = "ssh-key")]
+    pub ssh_key: Option<String>,
+
     /// Allow-list CIDR for SSH access during transfer workflows.
     #[arg(long = "allow-from")]
     pub allow_from: Vec<String>,
@@ -295,6 +311,14 @@ mod tests {
             "--dry-run",
             "--ssh-host-key",
             "SHA256:test",
+            "--ssh-port",
+            "2222",
+            "--ssh-user",
+            "backup",
+            "--ssh-password",
+            "transfer-value",
+            "--ssh-key",
+            "/Users/example/.ssh/id_ed25519",
             "--allow-from",
             "203.0.113.10/32",
             "--ensure-ssh",
@@ -305,6 +329,13 @@ mod tests {
 
         assert!(cli.dry_run);
         assert_eq!(cli.ssh_host_key.as_deref(), Some("SHA256:test"));
+        assert_eq!(cli.ssh_port, Some(2222));
+        assert_eq!(cli.ssh_user.as_deref(), Some("backup"));
+        assert_eq!(cli.ssh_password.as_deref(), Some("transfer-value"));
+        assert_eq!(
+            cli.ssh_key.as_deref(),
+            Some("/Users/example/.ssh/id_ed25519")
+        );
         assert_eq!(cli.allow_from, vec!["203.0.113.10/32"]);
         assert!(cli.ensure_ssh);
         assert!(cli.restore_ssh);

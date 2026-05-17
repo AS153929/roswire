@@ -44,6 +44,9 @@ fn config_device_add_and_inspect_work() {
             "user=master",
             "protocol=auto",
             "transfer=ssh",
+            "ssh_port=2222",
+            "ssh_user=backup",
+            "ssh_key=/Users/example/.ssh/id_ed25519",
             "--json",
         ],
     )
@@ -62,7 +65,13 @@ fn config_device_add_and_inspect_work() {
     )
     .success()
     .stdout(predicate::str::contains("\"active_profile\":\"studio\""))
-    .stdout(predicate::str::contains("\"10.189.189.1\""));
+    .stdout(predicate::str::contains("\"10.189.189.1\""))
+    .stdout(predicate::str::contains("\"ssh_port\""))
+    .stdout(predicate::str::contains("\"2222\""))
+    .stdout(predicate::str::contains("\"ssh_user\""))
+    .stdout(predicate::str::contains("backup"))
+    .stdout(predicate::str::contains("***REDACTED***/id_ed25519"))
+    .stdout(predicate::str::contains("/Users/example/.ssh").not());
 }
 
 #[test]
