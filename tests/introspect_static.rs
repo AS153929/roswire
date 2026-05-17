@@ -61,6 +61,12 @@ fn doctor_json_is_local_by_default() {
         ))
         .stdout(predicate::str::contains("\"api_ssl_tls\":\"available\""))
         .stdout(predicate::str::contains(
+            "\"protocol_auto_probe\":\"available\"",
+        ))
+        .stdout(predicate::str::contains(
+            "\"rest_remote_doctor\":\"available\"",
+        ))
+        .stdout(predicate::str::contains(
             "\"ssh_transfer_runtime\":\"not_implemented\"",
         ));
 }
