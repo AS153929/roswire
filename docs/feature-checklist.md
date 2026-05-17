@@ -323,7 +323,27 @@
 
 ## 下一阶段建议
 
-- [ ] 创建真机验收 issue：RouterOS v6 / v7 / REST / API / API-SSL / SSH/SFTP 矩阵
-- [ ] 创建命令覆盖扩展 issue：优先 `/ip/firewall`、`/ip/route`、`/interface/wireguard`
-- [ ] 创建发布工程 issue：release workflow、checksum、安装文档
-- [ ] 清理旧防御性文案，避免误导“SSH transfer 未实现”
+- [x] 创建真机验收 issue：RouterOS v6 / v7 / REST / API / API-SSL / SSH/SFTP 矩阵（#60）
+- [x] 创建命令覆盖扩展 issue：优先 `/ip/firewall`、`/ip/route`、`/interface/wireguard`（#70-#75）
+- [x] 创建发布工程 issue：release workflow、checksum、安装文档（#61）
+- [ ] 清理旧防御性文案，避免误导“SSH transfer 未实现”（#76）
+
+## Backlog issue 对照
+
+- #60 `M8: 建立 RouterOS 真机/CHR 验收矩阵`
+- #61 `M8: 发布工程与安装文档`
+- #62 `M8: 多平台 keychain smoke 测试`
+- #63 `M8: 定义生产级稳定版验收门槛`
+- #64 `M7: 扩展远端 schema cache TTL/refresh 与菜单 overlay`
+- #65 `M7: 实现 SSH 服务 ensure/restore 与白名单合并`
+- #66 `M7: 增强文件工作流覆盖策略、超时与重试`
+- #67 `M7: 实现 SCP fallback 与加密 SSH 私钥 passphrase 支持`
+- #68 `M7: 实现 system script put 工作流`
+- #69 `M7: 实现 RouterOS raw command passthrough`
+- #70 `M7: 扩展 /ip/firewall 命令族`
+- #71 `M7: 扩展 /ip/route 命令族`
+- #72 `M7: 扩展 /interface/wireguard 命令族`
+- #73 `M7: 扩展 /system/package 命令族`
+- #74 `M7: 扩展 /user 命令族`
+- #75 `M7: 扩展 /tool 命令族`
+- #76 `Cleanup: 审计 unsupported/not implemented 文案与 checklist 同步`
