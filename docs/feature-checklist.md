@@ -110,7 +110,7 @@
 - [x] `/interface/wireguard` 命令族（interface/peers print，#72）
 - [x] `/system/package` 命令族（print，#73）
 - [x] `/user` 命令族（print，#74）
-- [ ] `/tool` 命令族
+- [x] `/tool` 命令族（netwatch/mac-server print，#75）
 - [ ] 原始命令透传模式
 - [ ] `script put <name> --source @<local.rsc>` 工作流
 
@@ -345,5 +345,5 @@
 - #72 `M7: 扩展 /interface/wireguard 命令族`（完成：interface/peers print）
 - #73 `M7: 扩展 /system/package 命令族`（完成：print）
 - #74 `M7: 扩展 /user 命令族`（完成：print）
-- #75 `M7: 扩展 /tool 命令族`
+- #75 `M7: 扩展 /tool 命令族`（完成：netwatch/mac-server print）
 - #76 `Cleanup: 审计 unsupported/not implemented 文案与 checklist 同步`

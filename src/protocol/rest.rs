@@ -323,6 +323,31 @@ mod tests {
     }
 
     #[test]
+    fn rest_tool_netwatch_print_reads_json_array() {
+        let server = TestServer::responding_with(
+            200,
+            "application/json",
+            r#"[{".id":"*1","host":"192.0.2.1","status":"up"}]"#,
+        );
+        let credential = test_credential();
+        let client = RestClient::with_base_url(server.base_url(), "admin", &credential);
+        let request = build_protocol_request(&ParsedInvocation {
+            path: vec!["tool".to_owned(), "netwatch".to_owned()],
+            action: "print".to_owned(),
+            resolved_args: BTreeMap::new(),
+        })
+        .expect("request should map");
+
+        let value = client
+            .execute_request(&request)
+            .expect("REST tool netwatch print should work");
+        let http_request = server.request();
+
+        assert_eq!(value[0]["status"], "up");
+        assert!(http_request.contains("GET /rest/tool/netwatch HTTP/1.1"));
+    }
+
+    #[test]
     fn rest_wireguard_print_reads_json_array() {
         let server = TestServer::responding_with(
             200,
