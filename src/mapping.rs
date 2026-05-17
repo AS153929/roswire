@@ -93,10 +93,44 @@ impl ProtocolRequest {
 }
 
 pub fn build_protocol_request(invocation: &ParsedInvocation) -> RosWireResult<ProtocolRequest> {
+    let mapping = resolve_mapping(invocation)?;
+    validate_required_args(invocation, &mapping)?;
+
     Ok(ProtocolRequest {
-        mapping: resolve_mapping(invocation)?,
+        mapping,
         resolved_args: invocation.resolved_args.clone(),
     })
+}
+
+fn validate_required_args(
+    invocation: &ParsedInvocation,
+    mapping: &CommandMapping,
+) -> RosWireResult<()> {
+    let required = match (mapping.cli_path.as_slice(), mapping.action_kind) {
+        ([ip, address], ActionKind::Add) if ip == "ip" && address == "address" => {
+            &["address", "interface"][..]
+        }
+        ([ip, address], ActionKind::Set | ActionKind::Remove)
+            if ip == "ip" && address == "address" =>
+        {
+            &[".id"][..]
+        }
+        _ => &[][..],
+    };
+
+    for name in required {
+        if !invocation.resolved_args.contains_key(*name) {
+            return Err(Box::new(
+                RosWireError::usage(format!(
+                    "missing required argument for {}: {name}=<value>",
+                    command_name(invocation),
+                ))
+                .with_context(mapping_error_context(invocation)),
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 pub fn resolve_mapping(invocation: &ParsedInvocation) -> RosWireResult<CommandMapping> {
@@ -295,6 +329,23 @@ mod tests {
                 "=interface=ether1".to_owned(),
             ],
         );
+    }
+
+    #[test]
+    fn write_requests_validate_required_arguments_before_network() {
+        let missing_interface = build_protocol_request(&invocation(
+            &["ip", "address"],
+            "add",
+            &[("address", "192.168.88.2/24")],
+        ))
+        .expect_err("add should require interface");
+        assert_eq!(missing_interface.error_code, ErrorCode::UsageError);
+        assert_eq!(missing_interface.context.command, "ip/address/add");
+
+        let missing_id = build_protocol_request(&invocation(&["ip", "address"], "remove", &[]))
+            .expect_err("remove should require .id");
+        assert_eq!(missing_id.error_code, ErrorCode::UsageError);
+        assert_eq!(missing_id.context.command, "ip/address/remove");
     }
 
     #[test]

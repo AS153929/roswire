@@ -282,4 +282,52 @@ mod tests {
         assert_eq!(error.error_code, ErrorCode::RosApiFailure);
         assert_eq!(error.message, "no such item");
     }
+
+    #[test]
+    fn executor_sends_write_requests_for_add_set_and_remove() {
+        for (action, args, expected) in [
+            (
+                "add",
+                vec![("address", "192.0.2.10/24"), ("interface", "bridge")],
+                vec![
+                    "/ip/address/add".to_owned(),
+                    "=address=192.0.2.10/24".to_owned(),
+                    "=interface=bridge".to_owned(),
+                ],
+            ),
+            (
+                "set",
+                vec![(".id", "*1"), ("disabled", "yes")],
+                vec![
+                    "/ip/address/set".to_owned(),
+                    "=.id=*1".to_owned(),
+                    "=disabled=yes".to_owned(),
+                ],
+            ),
+            (
+                "remove",
+                vec![(".id", "*1")],
+                vec!["/ip/address/remove".to_owned(), "=.id=*1".to_owned()],
+            ),
+        ] {
+            let stream = FakeApiStream::with_sentences(&[vec!["!done".to_owned()]]);
+            let mut session = ClassicApiSession::new(stream);
+            let request = build_protocol_request(&ParsedInvocation {
+                path: vec!["ip".to_owned(), "address".to_owned()],
+                action: action.to_owned(),
+                resolved_args: args
+                    .into_iter()
+                    .map(|(key, value)| (key.to_owned(), value.to_owned()))
+                    .collect(),
+            })
+            .expect("write request should map");
+
+            let rows = session
+                .execute_request(&request)
+                .expect("write request should execute");
+
+            assert!(rows.is_empty());
+            assert_eq!(session.stream.written_sentences()[0], expected);
+        }
+    }
 }

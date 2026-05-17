@@ -79,7 +79,7 @@ impl RestClient {
         };
 
         match result {
-            Ok(response) => parse_response(response),
+            Ok(response) => parse_response(method, response),
             Err(ureq::Error::Status(status, response)) => Err(Box::new(map_status_error(
                 status,
                 response.into_string().unwrap_or_default(),
@@ -91,12 +91,15 @@ impl RestClient {
     }
 }
 
-fn parse_response(response: ureq::Response) -> RosWireResult<Value> {
+fn parse_response(method: RestMethod, response: ureq::Response) -> RosWireResult<Value> {
     let body = response.into_string().map_err(|error| {
         Box::new(RosWireError::network(format!(
             "failed to read RouterOS REST response: {error}",
         )))
     })?;
+    if method != RestMethod::Get && body.trim().is_empty() {
+        return Ok(serde_json::json!({ "status": "ok" }));
+    }
     serde_json::from_str(&body).map_err(|error| {
         Box::new(RosWireError::ros_api_failure(format!(
             "RouterOS REST response is not valid JSON: {error}",
@@ -290,20 +293,57 @@ mod tests {
 
     #[test]
     fn rest_patch_requires_id_argument_before_network() {
-        let credential = test_credential();
-        let client = RestClient::with_base_url("http://127.0.0.1:1", "admin", &credential);
-        let request = build_protocol_request(&ParsedInvocation {
+        let error = build_protocol_request(&ParsedInvocation {
             path: vec!["ip".to_owned(), "address".to_owned()],
             action: "set".to_owned(),
             resolved_args: BTreeMap::new(),
         })
-        .expect("request should map");
-
-        let error = client
-            .execute_request(&request)
-            .expect_err("missing id should fail before HTTP");
+        .expect_err("missing id should fail before HTTP");
 
         assert_eq!(error.error_code, ErrorCode::UsageError);
+    }
+
+    #[test]
+    fn rest_put_and_delete_support_empty_success_bodies() {
+        let put_server = TestServer::responding_with(204, "application/json", "");
+        let credential = test_credential();
+        let client = RestClient::with_base_url(put_server.base_url(), "admin", &credential);
+        let add_request = build_protocol_request(&ParsedInvocation {
+            path: vec!["ip".to_owned(), "address".to_owned()],
+            action: "add".to_owned(),
+            resolved_args: BTreeMap::from([
+                ("address".to_owned(), "192.0.2.10/24".to_owned()),
+                ("interface".to_owned(), "bridge".to_owned()),
+            ]),
+        })
+        .expect("add should map");
+
+        let value = client
+            .execute_request(&add_request)
+            .expect("empty PUT success should be accepted");
+        let put_request = put_server.request();
+
+        assert_eq!(value, serde_json::json!({ "status": "ok" }));
+        assert!(put_request.contains("PUT /rest/ip/address HTTP/1.1"));
+        assert!(put_request.contains(r#""address":"192.0.2.10/24""#));
+
+        let delete_server = TestServer::responding_with(204, "application/json", "");
+        let client = RestClient::with_base_url(delete_server.base_url(), "admin", &credential);
+        let remove_request = build_protocol_request(&ParsedInvocation {
+            path: vec!["ip".to_owned(), "address".to_owned()],
+            action: "remove".to_owned(),
+            resolved_args: BTreeMap::from([(".id".to_owned(), "*1".to_owned())]),
+        })
+        .expect("remove should map");
+
+        let value = client
+            .execute_request(&remove_request)
+            .expect("empty DELETE success should be accepted");
+        let delete_request = delete_server.request();
+
+        assert_eq!(value, serde_json::json!({ "status": "ok" }));
+        assert!(delete_request.contains("DELETE /rest/ip/address/*1 HTTP/1.1"));
+        assert!(!delete_request.contains("Content-Type: application/json"));
     }
 
     #[test]
