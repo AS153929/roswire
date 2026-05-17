@@ -1,13 +1,21 @@
 use crate::args::Cli;
 use crate::config;
 use crate::error::{self, ErrorContext, RosWireError, RosWireResult};
+use base64::{engine::general_purpose::STANDARD_NO_PAD as BASE64_NO_PAD, Engine as _};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+use std::fs::{self, File};
+use std::io::{Read, Write};
 use std::net::IpAddr;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::Path;
+use std::time::Duration;
 
 const PLAN_SCHEMA_VERSION: &str = "roswire.transfer.plan.v1";
 const DEFAULT_TRANSFER_BACKEND: &str = "ssh";
+const RESULT_SCHEMA_VERSION: &str = "roswire.transfer.result.v1";
+const MAX_TRANSFER_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TransferCommand {
@@ -117,13 +125,46 @@ pub struct TransferStep {
     pub dry_run_side_effects: &'static str,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct TransferResultPayload {
+    pub schema_version: &'static str,
+    pub operation: String,
+    pub transfer_backend: String,
+    pub status: &'static str,
+    pub bytes: u64,
+    pub checksum_sha256: String,
+    pub paths: TransferPaths,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SshRuntimeConfig {
+    host: String,
+    port: u16,
+    user: String,
+    password: Option<String>,
+    key_path: Option<String>,
+    expected_host_key: String,
+}
+
 pub fn handle(tokens: &[String], cli: &Cli) -> Option<RosWireResult<String>> {
     let command = match parse_transfer_command(tokens)? {
         Ok(command) => command,
         Err(error) => return Some(Err(error)),
     };
     let env = read_env_map();
-    Some(build_plan_for_env(command, cli, &env).and_then(|plan| render_json(&plan)))
+    Some(handle_transfer_for_env(command, cli, &env))
+}
+
+fn handle_transfer_for_env(
+    command: TransferCommand,
+    cli: &Cli,
+    env: &BTreeMap<String, String>,
+) -> RosWireResult<String> {
+    if cli.dry_run {
+        return build_plan_for_env(command, cli, env).and_then(|plan| render_json(&plan));
+    }
+
+    execute_transfer_for_env(command, cli, env).and_then(|payload| render_json(&payload))
 }
 
 fn parse_transfer_command(tokens: &[String]) -> Option<RosWireResult<TransferCommand>> {
@@ -159,6 +200,75 @@ fn parse_transfer_command(tokens: &[String]) -> Option<RosWireResult<TransferCom
             ))))
         }
         _ => None,
+    }
+}
+
+fn execute_transfer_for_env(
+    command: TransferCommand,
+    cli: &Cli,
+    env: &BTreeMap<String, String>,
+) -> RosWireResult<TransferResultPayload> {
+    let backend = resolve_transfer_backend(cli, env)?;
+    if backend != DEFAULT_TRANSFER_BACKEND {
+        return Err(Box::new(RosWireError::usage(format!(
+            "unsupported transfer backend: {backend}",
+        ))));
+    }
+    let context = transfer_context(&command, &backend, cli, env);
+    if !matches!(
+        command,
+        TransferCommand::FileUpload { .. } | TransferCommand::FileDownload { .. }
+    ) {
+        return Err(Box::new(
+            RosWireError::unsupported_action(
+                "real import/export/backup workflows are not implemented yet; use file upload/download or --dry-run",
+            )
+            .with_context(context),
+        ));
+    }
+
+    let profile = load_selected_profile(cli, env)?;
+    let runtime = resolve_ssh_runtime_config(cli, env, profile.as_ref())
+        .map_err(|error| Box::new((*error).clone().with_context(context.clone())))?;
+
+    match &command {
+        TransferCommand::FileUpload { local, remote } => {
+            execute_upload(local, remote, &runtime, &context).map(|(bytes, checksum_sha256)| {
+                TransferResultPayload {
+                    schema_version: RESULT_SCHEMA_VERSION,
+                    operation: command.operation().to_owned(),
+                    transfer_backend: backend,
+                    status: "ok",
+                    bytes,
+                    checksum_sha256,
+                    paths: TransferPaths {
+                        local_path: Some(redact_local_path(local)),
+                        remote_path: Some(redact_remote_path(remote)),
+                        temporary_remote_path: None,
+                        temporary_local_path: None,
+                    },
+                }
+            })
+        }
+        TransferCommand::FileDownload { remote, local } => {
+            execute_download(remote, local, &runtime, &context).map(|(bytes, checksum_sha256)| {
+                TransferResultPayload {
+                    schema_version: RESULT_SCHEMA_VERSION,
+                    operation: command.operation().to_owned(),
+                    transfer_backend: backend,
+                    status: "ok",
+                    bytes,
+                    checksum_sha256,
+                    paths: TransferPaths {
+                        local_path: Some(redact_local_path(local)),
+                        remote_path: Some(redact_remote_path(remote)),
+                        temporary_remote_path: None,
+                        temporary_local_path: None,
+                    },
+                }
+            })
+        }
+        _ => unreachable!("non file transfer is rejected before execution"),
     }
 }
 
@@ -482,6 +592,318 @@ fn resolve_ssh_transfer_summary(
     })
 }
 
+fn resolve_ssh_runtime_config(
+    cli: &Cli,
+    env: &BTreeMap<String, String>,
+    profile: Option<&config::ProfileConfig>,
+) -> RosWireResult<SshRuntimeConfig> {
+    let host = cli
+        .host
+        .clone()
+        .or_else(|| env.get("ROS_HOST").cloned())
+        .or_else(|| profile.and_then(|profile| profile.host.clone()))
+        .ok_or_else(|| {
+            Box::new(RosWireError::config(
+                "missing SSH transfer host; set --host, ROS_HOST, or profile host",
+            ))
+        })?;
+    config::validate_remote_host(&host)?;
+
+    let summary = resolve_ssh_transfer_summary(cli, env, profile)?;
+    if summary.user == "reuse-api-user" {
+        return Err(Box::new(RosWireError::config(
+            "missing SSH transfer user; set --ssh-user, ROS_SSH_USER, --user, ROS_USER, or profile user",
+        )));
+    }
+
+    let key_path = cli
+        .ssh_key
+        .clone()
+        .or_else(|| env.get("ROS_SSH_KEY").cloned())
+        .or_else(|| profile.and_then(|profile| profile.ssh_key.clone()))
+        .filter(|value| !value.trim().is_empty());
+    let password = if key_path.is_some() {
+        None
+    } else {
+        Some(resolve_ssh_password(cli, env, profile)?)
+    };
+    let expected_host_key = cli
+        .ssh_host_key
+        .clone()
+        .or_else(|| env.get("ROS_SSH_HOST_KEY").cloned())
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            Box::new(RosWireError::ssh_host_key_required(
+                "SSH transfer requires an expected RouterOS SSH host key fingerprint",
+            ))
+        })?;
+
+    Ok(SshRuntimeConfig {
+        host,
+        port: summary.port,
+        user: summary.user,
+        password,
+        key_path,
+        expected_host_key,
+    })
+}
+
+fn resolve_ssh_password(
+    cli: &Cli,
+    env: &BTreeMap<String, String>,
+    profile: Option<&config::ProfileConfig>,
+) -> RosWireResult<String> {
+    if let Some(password) = cli
+        .ssh_password
+        .clone()
+        .or_else(|| env.get("ROS_SSH_PASSWORD").cloned())
+        .or_else(|| cli.password.clone())
+        .or_else(|| env.get("ROS_PASSWORD").cloned())
+    {
+        return Ok(password);
+    }
+
+    let Some(profile) = profile else {
+        return Err(Box::new(RosWireError::config(
+            "missing SSH transfer password; set --ssh-password, ROS_SSH_PASSWORD, --password, ROS_PASSWORD, or profile secret ssh_password/password",
+        )));
+    };
+
+    config::resolve_profile_secret_value(profile, "ssh_password", env)?
+        .or_else(|| config::resolve_profile_secret_value(profile, "password", env).ok().flatten())
+        .ok_or_else(|| {
+            Box::new(RosWireError::config(
+                "missing SSH transfer password; set --ssh-password, ROS_SSH_PASSWORD, or profile secret ssh_password/password",
+            ))
+        })
+}
+
+fn execute_upload(
+    local: &str,
+    remote: &str,
+    config: &SshRuntimeConfig,
+    context: &ErrorContext,
+) -> RosWireResult<(u64, String)> {
+    let metadata = fs::metadata(local).map_err(|error| {
+        Box::new(
+            RosWireError::file_transfer_failed(format!("failed to inspect local file: {error}"))
+                .with_context(context.clone()),
+        )
+    })?;
+    if metadata.len() > MAX_TRANSFER_BYTES {
+        return Err(Box::new(
+            RosWireError::file_too_large(format!(
+                "local file exceeds transfer limit of {MAX_TRANSFER_BYTES} bytes",
+            ))
+            .with_context(context.clone()),
+        ));
+    }
+
+    let session = open_ssh_session(config, context)?;
+    let sftp = session.sftp().map_err(|error| {
+        Box::new(
+            RosWireError::file_transfer_failed(format!("failed to open SFTP session: {error}"))
+                .with_context(context.clone()),
+        )
+    })?;
+    let mut source = File::open(local).map_err(|error| {
+        Box::new(
+            RosWireError::file_transfer_failed(format!("failed to open local file: {error}"))
+                .with_context(context.clone()),
+        )
+    })?;
+    let mut target = sftp.create(Path::new(remote)).map_err(|error| {
+        Box::new(
+            RosWireError::file_transfer_failed(format!("failed to create remote file: {error}"))
+                .with_context(context.clone()),
+        )
+    })?;
+    copy_with_sha256(&mut source, &mut target, context)
+}
+
+fn execute_download(
+    remote: &str,
+    local: &str,
+    config: &SshRuntimeConfig,
+    context: &ErrorContext,
+) -> RosWireResult<(u64, String)> {
+    let session = open_ssh_session(config, context)?;
+    let sftp = session.sftp().map_err(|error| {
+        Box::new(
+            RosWireError::file_transfer_failed(format!("failed to open SFTP session: {error}"))
+                .with_context(context.clone()),
+        )
+    })?;
+    let mut source = sftp.open(Path::new(remote)).map_err(|error| {
+        Box::new(
+            RosWireError::file_transfer_failed(format!("failed to open remote file: {error}"))
+                .with_context(context.clone()),
+        )
+    })?;
+    let mut target = File::create(local).map_err(|error| {
+        Box::new(
+            RosWireError::file_transfer_failed(format!("failed to create local file: {error}"))
+                .with_context(context.clone()),
+        )
+    })?;
+    copy_with_sha256(&mut source, &mut target, context)
+}
+
+fn open_ssh_session(
+    config: &SshRuntimeConfig,
+    context: &ErrorContext,
+) -> RosWireResult<ssh2::Session> {
+    let address = format!("{}:{}", config.host, config.port);
+    let socket_addr = address
+        .to_socket_addrs()
+        .map_err(|error| {
+            Box::new(
+                RosWireError::network(format!("failed to resolve SSH host: {error}"))
+                    .with_context(context.clone()),
+            )
+        })?
+        .next()
+        .ok_or_else(|| {
+            Box::new(
+                RosWireError::network("failed to resolve SSH host").with_context(context.clone()),
+            )
+        })?;
+    let tcp =
+        TcpStream::connect_timeout(&socket_addr, Duration::from_secs(10)).map_err(|error| {
+            Box::new(
+                RosWireError::network(format!("failed to connect to SSH service: {error}"))
+                    .with_context(context.clone()),
+            )
+        })?;
+    tcp.set_read_timeout(Some(Duration::from_secs(30))).ok();
+    tcp.set_write_timeout(Some(Duration::from_secs(30))).ok();
+
+    let mut session = ssh2::Session::new().map_err(|error| {
+        Box::new(
+            RosWireError::file_transfer_failed(format!("failed to create SSH session: {error}"))
+                .with_context(context.clone()),
+        )
+    })?;
+    session.set_tcp_stream(tcp);
+    session.handshake().map_err(|error| {
+        Box::new(
+            RosWireError::network(format!("SSH handshake failed: {error}"))
+                .with_context(context.clone()),
+        )
+    })?;
+    verify_host_key(&session, &config.expected_host_key, context)?;
+
+    if let Some(key_path) = &config.key_path {
+        session
+            .userauth_pubkey_file(&config.user, None, Path::new(key_path), None)
+            .map_err(|error| {
+                Box::new(
+                    RosWireError::auth_failed(format!("SSH key authentication failed: {error}"))
+                        .with_context(context.clone()),
+                )
+            })?;
+    } else {
+        let password = config.password.as_deref().ok_or_else(|| {
+            Box::new(RosWireError::config("missing SSH password").with_context(context.clone()))
+        })?;
+        session
+            .userauth_password(&config.user, password)
+            .map_err(|error| {
+                Box::new(
+                    RosWireError::auth_failed(format!(
+                        "SSH password authentication failed: {error}"
+                    ))
+                    .with_context(context.clone()),
+                )
+            })?;
+    }
+
+    if !session.authenticated() {
+        return Err(Box::new(
+            RosWireError::auth_failed("SSH authentication failed").with_context(context.clone()),
+        ));
+    }
+
+    Ok(session)
+}
+
+fn verify_host_key(
+    session: &ssh2::Session,
+    expected: &str,
+    context: &ErrorContext,
+) -> RosWireResult<()> {
+    let actual = session
+        .host_key_hash(ssh2::HashType::Sha256)
+        .map(sha256_fingerprint)
+        .ok_or_else(|| {
+            Box::new(
+                RosWireError::ssh_host_key_mismatch("SSH host key fingerprint is unavailable")
+                    .with_context(context.clone()),
+            )
+        })?;
+    if !host_key_matches(expected, &actual) {
+        return Err(Box::new(
+            RosWireError::ssh_host_key_mismatch(
+                "SSH host key fingerprint does not match expected value",
+            )
+            .with_context(context.clone()),
+        ));
+    }
+
+    Ok(())
+}
+
+fn host_key_matches(expected: &str, actual: &str) -> bool {
+    expected.trim() == actual
+}
+
+fn sha256_fingerprint(bytes: &[u8]) -> String {
+    format!("SHA256:{}", BASE64_NO_PAD.encode(bytes))
+}
+
+fn copy_with_sha256<R: Read, W: Write>(
+    reader: &mut R,
+    writer: &mut W,
+    context: &ErrorContext,
+) -> RosWireResult<(u64, String)> {
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 8192];
+    let mut bytes = 0_u64;
+    loop {
+        let read = reader.read(&mut buffer).map_err(|error| {
+            Box::new(
+                RosWireError::file_transfer_failed(format!(
+                    "failed to read transfer stream: {error}"
+                ))
+                .with_context(context.clone()),
+            )
+        })?;
+        if read == 0 {
+            break;
+        }
+        bytes += read as u64;
+        if bytes > MAX_TRANSFER_BYTES {
+            return Err(Box::new(
+                RosWireError::file_too_large(format!(
+                    "transfer exceeds limit of {MAX_TRANSFER_BYTES} bytes",
+                ))
+                .with_context(context.clone()),
+            ));
+        }
+        hasher.update(&buffer[..read]);
+        writer.write_all(&buffer[..read]).map_err(|error| {
+            Box::new(
+                RosWireError::file_transfer_failed(format!(
+                    "failed to write transfer stream: {error}"
+                ))
+                .with_context(context.clone()),
+            )
+        })?;
+    }
+
+    Ok((bytes, format!("{:x}", hasher.finalize())))
+}
+
 fn parse_port(value: &str) -> RosWireResult<u16> {
     value.parse::<u16>().map_err(|error| {
         Box::new(RosWireError::usage(format!(
@@ -673,12 +1095,18 @@ fn read_env_map() -> BTreeMap<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_plan_for_env, parse_transfer_command, validate_safe_cidr, TransferCommand};
+    use super::{
+        build_plan_for_env, copy_with_sha256, handle_transfer_for_env, host_key_matches,
+        load_selected_profile, parse_port, parse_transfer_command, resolve_ssh_runtime_config,
+        resolve_transfer_backend, sha256_fingerprint, validate_safe_cidr, TransferCommand,
+        MAX_TRANSFER_BYTES,
+    };
     use crate::args::Cli;
-    use crate::error::ErrorCode;
+    use crate::error::{ErrorCode, ErrorContext};
     use clap::Parser;
     use std::collections::BTreeMap;
     use std::fs;
+    use std::io::Cursor;
 
     #[test]
     fn file_upload_plan_contains_safe_preconditions_and_paths() {
@@ -1009,6 +1437,237 @@ target = "password"
             .expect_err("wide allow-from should fail");
 
         assert_eq!(error.error_code, ErrorCode::SshWhitelistUnsafe);
+    }
+
+    #[test]
+    fn runtime_transfer_requires_host_key_before_connecting() {
+        let cli = Cli::try_parse_from([
+            "roswire",
+            "--host",
+            "198.51.100.10",
+            "--user",
+            "admin",
+            "--password",
+            "test-value",
+            "file",
+            "upload",
+            "setup.rsc",
+            "flash/setup.rsc",
+        ])
+        .expect("cli should parse");
+        let command = parse_transfer_command(&cli.tokens)
+            .expect("transfer command should be detected")
+            .expect("transfer command should parse");
+
+        let error = handle_transfer_for_env(command, &cli, &isolated_env())
+            .expect_err("host key should be required");
+
+        assert_eq!(error.error_code, ErrorCode::SshHostKeyRequired);
+        assert_eq!(error.context.command, "file/upload");
+    }
+
+    #[test]
+    fn runtime_transfer_rejects_non_file_workflows_before_connecting() {
+        let cli = Cli::try_parse_from([
+            "roswire",
+            "--host",
+            "198.51.100.10",
+            "--user",
+            "admin",
+            "--password",
+            "test-value",
+            "import",
+            "setup.rsc",
+        ])
+        .expect("cli should parse");
+        let command = parse_transfer_command(&cli.tokens)
+            .expect("transfer command should be detected")
+            .expect("transfer command should parse");
+
+        let error = handle_transfer_for_env(command, &cli, &isolated_env())
+            .expect_err("import runtime should wait for workflow issue");
+
+        assert_eq!(error.error_code, ErrorCode::UnsupportedAction);
+        assert_eq!(error.context.command, "import");
+    }
+
+    #[test]
+    fn runtime_transfer_requires_password_when_key_is_absent() {
+        let cli = Cli::try_parse_from([
+            "roswire",
+            "--host",
+            "198.51.100.10",
+            "--ssh-user",
+            "admin",
+            "--ssh-host-key",
+            "SHA256:test",
+            "file",
+            "download",
+            "flash/setup.rsc",
+            "setup.rsc",
+        ])
+        .expect("cli should parse");
+        let command = parse_transfer_command(&cli.tokens)
+            .expect("transfer command should be detected")
+            .expect("transfer command should parse");
+
+        let error = handle_transfer_for_env(command, &cli, &isolated_env())
+            .expect_err("password should be required before SSH connect");
+
+        assert_eq!(error.error_code, ErrorCode::ConfigError);
+        assert!(error.message.contains("missing SSH transfer password"));
+    }
+
+    #[test]
+    fn runtime_upload_rejects_large_file_before_connecting() {
+        let temp = tempfile::tempdir().expect("temp dir should be created");
+        let local = temp.path().join("large.rsc");
+        fs::File::create(&local)
+            .expect("file should be created")
+            .set_len(MAX_TRANSFER_BYTES + 1)
+            .expect("sparse file size should be set");
+        let local = local.display().to_string();
+        let cli = Cli::try_parse_from([
+            "roswire",
+            "--host",
+            "198.51.100.10",
+            "--ssh-user",
+            "admin",
+            "--ssh-password",
+            "test-value",
+            "--ssh-host-key",
+            "SHA256:test",
+            "file",
+            "upload",
+            &local,
+            "flash/large.rsc",
+        ])
+        .expect("cli should parse");
+        let command = parse_transfer_command(&cli.tokens)
+            .expect("transfer command should be detected")
+            .expect("transfer command should parse");
+
+        let error = handle_transfer_for_env(command, &cli, &isolated_env())
+            .expect_err("large file should fail before SSH connect");
+
+        assert_eq!(error.error_code, ErrorCode::FileTooLarge);
+    }
+
+    #[test]
+    fn runtime_config_resolves_profile_secret_password() {
+        let temp = tempfile::tempdir().expect("temp dir should be created");
+        write_config(
+            temp.path(),
+            r#"
+version = 1
+default_profile = "studio"
+
+[profiles.studio]
+host = "198.51.100.10"
+user = "api-user"
+ssh_user = "ssh-profile"
+allow_plain_secrets = true
+
+[profiles.studio.secrets.password]
+type = "plain"
+value = "profile-secret"
+
+[profiles.studio.secrets.ssh_password]
+type = "same-as"
+target = "password"
+"#,
+        );
+        let cli = Cli::try_parse_from([
+            "roswire",
+            "--ssh-host-key",
+            "SHA256:test",
+            "file",
+            "download",
+            "flash/setup.rsc",
+            "setup.rsc",
+        ])
+        .expect("cli should parse");
+        let env = BTreeMap::from([("ROSWIRE_HOME".to_owned(), temp.path().display().to_string())]);
+        let profile = load_selected_profile(&cli, &env)
+            .expect("profile should load")
+            .expect("profile should exist");
+
+        let runtime = resolve_ssh_runtime_config(&cli, &env, Some(&profile))
+            .expect("runtime config should resolve");
+
+        assert_eq!(runtime.host, "198.51.100.10");
+        assert_eq!(runtime.user, "ssh-profile");
+        assert_eq!(runtime.password.as_deref(), Some("profile-secret"));
+        assert_eq!(runtime.expected_host_key, "SHA256:test");
+    }
+
+    #[test]
+    fn runtime_config_uses_key_auth_without_password() {
+        let cli = Cli::try_parse_from([
+            "roswire",
+            "--host",
+            "198.51.100.10",
+            "--user",
+            "api-user",
+            "--ssh-key",
+            "/Users/example/.ssh/id_ed25519",
+            "file",
+            "download",
+            "flash/setup.rsc",
+            "setup.rsc",
+        ])
+        .expect("cli should parse");
+        let env = BTreeMap::from([("ROS_SSH_HOST_KEY".to_owned(), "SHA256:from-env".to_owned())]);
+
+        let runtime =
+            resolve_ssh_runtime_config(&cli, &env, None).expect("runtime config should resolve");
+
+        assert_eq!(runtime.host, "198.51.100.10");
+        assert_eq!(runtime.user, "api-user");
+        assert_eq!(runtime.password, None);
+        assert_eq!(
+            runtime.key_path.as_deref(),
+            Some("/Users/example/.ssh/id_ed25519")
+        );
+        assert_eq!(runtime.expected_host_key, "SHA256:from-env");
+    }
+
+    #[test]
+    fn transfer_backend_and_port_validation_are_structured() {
+        let cli = Cli::try_parse_from(["roswire", "--transfer", "ssh", "file", "upload", "a", "b"])
+            .expect("cli should parse");
+
+        assert_eq!(
+            resolve_transfer_backend(&cli, &isolated_env()).expect("ssh backend should resolve"),
+            "ssh"
+        );
+        assert!(parse_port("not-a-port").is_err());
+    }
+
+    #[test]
+    fn host_key_fingerprint_uses_routeros_sha256_format() {
+        let fingerprint = sha256_fingerprint(b"12345678901234567890123456789012");
+
+        assert!(fingerprint.starts_with("SHA256:"));
+        assert!(host_key_matches(&fingerprint, &fingerprint));
+        assert!(!host_key_matches("SHA256:wrong", &fingerprint));
+    }
+
+    #[test]
+    fn copy_with_sha256_counts_bytes_and_hashes_content() {
+        let mut reader = Cursor::new(b"routeros".to_vec());
+        let mut writer = Vec::new();
+        let context = ErrorContext::default();
+
+        let (bytes, checksum) =
+            copy_with_sha256(&mut reader, &mut writer, &context).expect("copy should work");
+
+        assert_eq!(bytes, 8);
+        assert_eq!(writer, b"routeros");
+        assert_eq!(
+            checksum,
+            "777bb2ce0ca8318c55b28e4a9e676387cdafa753116b979531a1f71832c7a00b",
+        );
     }
 
     #[test]
