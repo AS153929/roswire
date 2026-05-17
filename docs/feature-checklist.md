@@ -111,7 +111,7 @@
 - [x] `/system/package` 命令族（print，#73）
 - [x] `/user` 命令族（print，#74）
 - [x] `/tool` 命令族（netwatch/mac-server print，#75）
-- [ ] 原始命令透传模式
+- [x] 原始命令透传模式（显式 `raw`、classic API、写操作需 `--allow-write`，#69）
 - [x] `script put <name> --source @<local.rsc>` 工作流（#68）
 
 ## 协议层
@@ -339,7 +339,7 @@
 - #66 `M7: 增强文件工作流覆盖策略、超时与重试`
 - #67 `M7: 实现 SCP fallback 与加密 SSH 私钥 passphrase 支持`
 - #68 `M7: 实现 system script put 工作流`（完成：dry-run、UTF-8/大小校验、classic/REST 写入映射与脱敏）
-- #69 `M7: 实现 RouterOS raw command passthrough`
+- #69 `M7: 实现 RouterOS raw command passthrough`（完成：显式 raw、classic words、只读/写安全边界、REST raw 不开放说明）
 - #70 `M7: 扩展 /ip/firewall 命令族`（完成：address-list/filter/nat print）
 - #71 `M7: 扩展 /ip/route 命令族`（完成：print）
 - #72 `M7: 扩展 /interface/wireguard 命令族`（完成：interface/peers print）

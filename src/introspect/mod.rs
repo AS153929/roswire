@@ -126,6 +126,7 @@ fn help_payload(tokens: &[String]) -> RosWireResult<String> {
                 "--debug".to_owned(),
                 "--include-remote".to_owned(),
                 "--source".to_owned(),
+                "--allow-write".to_owned(),
             ],
             commands: commands_payload().commands,
         };
@@ -521,6 +522,50 @@ fn catalog() -> Vec<CommandDefinition> {
                 "AUTH_FAILED".to_owned(),
                 "NETWORK_ERROR".to_owned(),
                 "ROS_API_FAILURE".to_owned(),
+            ],
+        },
+        CommandDefinition {
+            name: "raw".to_owned(),
+            summary: "Explicitly pass a RouterOS classic API path and key=value words for advanced unsupported commands.".to_owned(),
+            kind: "raw-routeros-command".to_owned(),
+            syntax: "roswire raw /system/resource/print [key=value ...] --json".to_owned(),
+            arguments: vec![
+                ArgumentSpec {
+                    name: "routeros-path".to_owned(),
+                    style: "positional".to_owned(),
+                    required: true,
+                    arg_type: "classic-api-path".to_owned(),
+                    description: "RouterOS classic API path beginning with `/`, e.g. /system/resource/print.".to_owned(),
+                    example: Some("/system/resource/print".to_owned()),
+                },
+                ArgumentSpec {
+                    name: "key=value".to_owned(),
+                    style: "key-value".to_owned(),
+                    required: false,
+                    arg_type: "string".to_owned(),
+                    description: "Additional RouterOS API word arguments. Sensitive keys and local paths are redacted in errors/logs.".to_owned(),
+                    example: Some("detail=yes".to_owned()),
+                },
+                ArgumentSpec {
+                    name: "--allow-write".to_owned(),
+                    style: "flag".to_owned(),
+                    required: false,
+                    arg_type: "bool".to_owned(),
+                    description: "Required for raw commands that are not `/.../print`; REST generic raw passthrough is intentionally unavailable.".to_owned(),
+                    example: Some("--allow-write".to_owned()),
+                },
+            ],
+            examples: vec![
+                "roswire raw /system/resource/print --json".to_owned(),
+                "roswire raw /tool/fetch url=https://example.invalid/a.rsc --allow-write --json".to_owned(),
+            ],
+            errors: vec![
+                "USAGE_ERROR".to_owned(),
+                "CONFIG_ERROR".to_owned(),
+                "AUTH_FAILED".to_owned(),
+                "NETWORK_ERROR".to_owned(),
+                "ROS_API_FAILURE".to_owned(),
+                "UNSUPPORTED_ACTION".to_owned(),
             ],
         },
         CommandDefinition {

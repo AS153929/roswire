@@ -85,6 +85,7 @@ fn run_with_cli(cli: &Cli) -> RosWireResult<()> {
 
 fn execute_invocation(invocation: args::ParsedInvocation, cli: &Cli) -> RosWireResult<()> {
     let request = mapping::build_protocol_request(&invocation)?;
+    validate_raw_safety(&invocation, &request, cli)?;
 
     let target = resolve_execution_target(cli)?;
     if target.requested_protocol == "auto" {
@@ -100,6 +101,34 @@ fn execute_invocation(invocation: args::ParsedInvocation, cli: &Cli) -> RosWireR
     }
 
     execute_api(&invocation, &request, &target, target.port)
+}
+
+fn validate_raw_safety(
+    invocation: &args::ParsedInvocation,
+    request: &ProtocolRequest,
+    cli: &Cli,
+) -> RosWireResult<()> {
+    if !request.mapping.is_raw() || request.mapping.action_kind == ActionKind::Print {
+        return Ok(());
+    }
+
+    if cli.allow_write {
+        return Ok(());
+    }
+
+    Err(Box::new(
+        error::RosWireError::usage(
+            "raw RouterOS commands that may mutate state require --allow-write",
+        )
+        .with_hint("use raw /.../print for read-only commands, or add --allow-write for explicit raw writes")
+        .with_context(ErrorContext {
+            command: mapping::command_name(invocation),
+            path: invocation.path.clone(),
+            action: invocation.action.clone(),
+            resolved_args: error::redact_resolved_args(&invocation.resolved_args),
+            ..ErrorContext::default()
+        }),
+    ))
 }
 
 fn execute_auto(
@@ -261,6 +290,14 @@ fn serialize_payload<T: Serialize>(value: &T, label: &str) -> RosWireResult<Stri
 }
 
 fn request_command_name(request: &ProtocolRequest) -> String {
+    if request.mapping.is_raw() {
+        return request
+            .mapping
+            .routeros_path
+            .trim_start_matches('/')
+            .to_owned();
+    }
+
     request
         .mapping
         .cli_path
@@ -584,7 +621,8 @@ mod tests {
         classify_probe_error, default_port, execution_context, parse_port, render_protocol_payload,
         resolve_execution_target_with_env, routeros_major_from_rest_resource,
         routeros_major_from_version, sanitized_response_value, unsupported_command_name,
-        validate_protocol, validate_routeros_version, with_context, ExecutionTarget,
+        validate_protocol, validate_raw_safety, validate_routeros_version, with_context,
+        ExecutionTarget,
     };
     use crate::args::{Cli, ParsedInvocation};
     use crate::error::{ErrorCode, RosWireError};
@@ -912,6 +950,69 @@ value = "v1:nonce:ciphertext"
         assert!(payload.contains("\"schema_version\":\"roswire.write.v1\""));
         assert!(!payload.contains(":put secret"));
         assert!(!payload.contains("super-secret"));
+    }
+
+    #[test]
+    fn raw_write_requires_explicit_allow_write() {
+        let cli = Cli::try_parse_from([
+            "roswire",
+            "raw",
+            "/tool/fetch",
+            "password=super-secret",
+            "src-path=/Users/example/setup.rsc",
+        ])
+        .expect("cli should parse");
+        let invocation = ParsedInvocation {
+            path: vec!["raw".to_owned()],
+            action: "/tool/fetch".to_owned(),
+            resolved_args: BTreeMap::from([
+                ("password".to_owned(), "super-secret".to_owned()),
+                ("src-path".to_owned(), "/Users/example/setup.rsc".to_owned()),
+            ]),
+        };
+        let request = build_protocol_request(&invocation).expect("raw request should map");
+
+        let error = validate_raw_safety(&invocation, &request, &cli)
+            .expect_err("raw write should require allow-write");
+
+        assert_eq!(error.error_code, ErrorCode::UsageError);
+        assert_eq!(
+            error
+                .context
+                .resolved_args
+                .get("password")
+                .map(String::as_str),
+            Some("***REDACTED***"),
+        );
+        assert_eq!(
+            error
+                .context
+                .resolved_args
+                .get("src-path")
+                .map(String::as_str),
+            Some("***REDACTED***/setup.rsc"),
+        );
+    }
+
+    #[test]
+    fn raw_write_payload_uses_routeros_path_as_command() {
+        let request = build_protocol_request(&ParsedInvocation {
+            path: vec!["raw".to_owned()],
+            action: "/tool/fetch".to_owned(),
+            resolved_args: BTreeMap::from([(
+                "url".to_owned(),
+                "https://example.invalid/a.rsc".to_owned(),
+            )]),
+        })
+        .expect("raw write request should map");
+        let response = serde_json::json!({"status":"ok"});
+
+        let payload = render_protocol_payload(&request, "api", &response)
+            .expect("raw write payload should serialize");
+
+        assert!(payload.contains("\"schema_version\":\"roswire.write.v1\""));
+        assert!(payload.contains("\"command\":\"tool/fetch\""));
+        assert!(payload.contains("\"action\":\"raw\""));
     }
 
     #[test]

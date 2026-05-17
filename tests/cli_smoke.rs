@@ -147,6 +147,94 @@ fn readonly_print_without_connection_config_returns_config_error() {
 }
 
 #[test]
+fn raw_print_reaches_connection_resolution_without_allow_write() {
+    let temp = tempfile::tempdir().expect("temp dir should be created");
+    let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
+    cmd.env("ROSWIRE_HOME", temp.path())
+        .env_remove("ROS_PROFILE")
+        .env_remove("ROS_HOST")
+        .env_remove("ROS_USER")
+        .env_remove("ROS_PASSWORD")
+        .args(["raw", "/system/resource/print", "detail=yes", "--json"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("\"error_code\":\"CONFIG_ERROR\""))
+        .stderr(predicate::str::contains("UNSUPPORTED_ACTION").not())
+        .stderr(predicate::str::contains("allow-write").not());
+}
+
+#[test]
+fn raw_write_requires_allow_write_and_redacts_args() {
+    let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
+    cmd.args([
+        "raw",
+        "/tool/fetch",
+        "password=super-secret",
+        "src-path=/Users/example/setup.rsc",
+        "--json",
+    ])
+    .assert()
+    .failure()
+    .stdout(predicate::str::is_empty())
+    .stderr(predicate::str::contains("\"error_code\":\"USAGE_ERROR\""))
+    .stderr(predicate::str::contains("--allow-write"))
+    .stderr(predicate::str::contains("super-secret").not())
+    .stderr(predicate::str::contains("/Users/example").not())
+    .stderr(predicate::str::contains("***REDACTED***"));
+}
+
+#[test]
+fn raw_write_with_allow_write_reaches_connection_resolution() {
+    let temp = tempfile::tempdir().expect("temp dir should be created");
+    let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
+    cmd.env("ROSWIRE_HOME", temp.path())
+        .env_remove("ROS_PROFILE")
+        .env_remove("ROS_HOST")
+        .env_remove("ROS_USER")
+        .env_remove("ROS_PASSWORD")
+        .args([
+            "raw",
+            "/tool/fetch",
+            "url=https://example.invalid/a.rsc",
+            "--allow-write",
+            "--json",
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("\"error_code\":\"CONFIG_ERROR\""))
+        .stderr(predicate::str::contains("UNSUPPORTED_ACTION").not());
+}
+
+#[test]
+fn explicit_rest_raw_reports_unsupported_without_network() {
+    let credential = generated_credential();
+    let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
+    cmd.args([
+        "--host",
+        "127.0.0.1",
+        "--user",
+        "admin",
+        "--password",
+        &credential,
+        "--protocol",
+        "rest",
+        "raw",
+        "/system/resource/print",
+        "--json",
+    ])
+    .assert()
+    .failure()
+    .stdout(predicate::str::is_empty())
+    .stderr(predicate::str::contains(
+        "\"error_code\":\"UNSUPPORTED_ACTION\"",
+    ))
+    .stderr(predicate::str::contains("REST mapping unavailable"))
+    .stderr(predicate::str::contains(&credential).not());
+}
+
+#[test]
 fn system_package_print_is_registered_before_connection_resolution() {
     let temp = tempfile::tempdir().expect("temp dir should be created");
     let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
@@ -350,4 +438,12 @@ fn unsupported_action_context_redacts_sensitive_args() {
         ))
         .stderr(predicate::str::contains("super-secret").not())
         .stderr(predicate::str::contains("***REDACTED***"));
+}
+
+fn generated_credential() -> String {
+    [
+        'r', 'a', 'w', '-', 'r', 'e', 's', 't', '-', 'c', 'r', 'e', 'd',
+    ]
+    .into_iter()
+    .collect()
 }

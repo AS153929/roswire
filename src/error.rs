@@ -358,11 +358,25 @@ pub fn redact_resolved_args(args: &BTreeMap<String, String>) -> BTreeMap<String,
     for (key, value) in args {
         if is_sensitive_key(key) {
             sanitized.insert(key.clone(), redact_value(value));
+        } else if looks_like_absolute_path(value) {
+            sanitized.insert(key.clone(), redact_local_path(value));
         } else {
             sanitized.insert(key.clone(), value.clone());
         }
     }
     sanitized
+}
+
+fn looks_like_absolute_path(value: &str) -> bool {
+    value.starts_with('/') || value.starts_with("~/")
+}
+
+fn redact_local_path(value: &str) -> String {
+    let name = value
+        .rsplit(['/', '\\'])
+        .find(|part| !part.is_empty())
+        .unwrap_or("path");
+    format!("***REDACTED***/{name}")
 }
 
 #[cfg(test)]
@@ -407,6 +421,7 @@ mod tests {
         args.insert("address".to_owned(), "192.168.88.2/24".to_owned());
         args.insert("password".to_owned(), "super-secret".to_owned());
         args.insert("api_token".to_owned(), "abc123".to_owned());
+        args.insert("src-path".to_owned(), "/Users/example/setup.rsc".to_owned());
 
         let sanitized = redact_resolved_args(&args);
 
@@ -421,6 +436,10 @@ mod tests {
         assert_eq!(
             sanitized.get("api_token").map(String::as_str),
             Some("***REDACTED***")
+        );
+        assert_eq!(
+            sanitized.get("src-path").map(String::as_str),
+            Some("***REDACTED***/setup.rsc")
         );
     }
 

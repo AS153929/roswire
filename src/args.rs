@@ -146,6 +146,10 @@ pub struct Cli {
     #[arg(long = "restore-ssh")]
     pub restore_ssh: bool,
 
+    /// Allow explicit raw RouterOS passthrough commands that may mutate state.
+    #[arg(long = "allow-write")]
+    pub allow_write: bool,
+
     /// Remove temporary remote files after transfer workflows.
     #[arg(long)]
     pub cleanup: bool,
@@ -366,5 +370,23 @@ mod tests {
         assert_eq!(cli.source.as_deref(), Some("@setup.rsc"));
         assert!(cli.dry_run);
         assert_eq!(cli.tokens, vec!["script", "put", "bootstrap"]);
+    }
+
+    #[test]
+    fn supports_raw_allow_write_flag_after_tokens() {
+        let cli = Cli::try_parse_from([
+            "roswire",
+            "raw",
+            "/ip/address/add",
+            "address=192.0.2.10/24",
+            "--allow-write",
+        ])
+        .expect("raw allow-write flag should parse");
+
+        assert!(cli.allow_write);
+        assert_eq!(
+            cli.tokens,
+            vec!["raw", "/ip/address/add", "address=192.0.2.10/24"]
+        );
     }
 }
