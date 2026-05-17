@@ -17,6 +17,7 @@ use protocol::classic::{
 };
 use protocol::rest::RestClient;
 use protocol::{ProbeResult, ProtocolProbe, RequestedProtocol, RouterOsMajor, SelectedProtocol};
+use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -51,16 +52,6 @@ pub fn run() -> RosWireResult<()> {
 
     let invocation = args::parse_invocation(&cli.tokens)?;
     let request = mapping::build_protocol_request(&invocation)?;
-
-    if request.mapping.action_kind != ActionKind::Print {
-        return Err(Box::new(
-            error::RosWireError::unsupported_action(format!(
-                "RouterOS write action is not implemented: {}",
-                mapping::command_name(&invocation),
-            ))
-            .with_context(unsupported_action_context(&cli, &invocation)),
-        ));
-    }
 
     let target = resolve_execution_target(&cli)?;
     if target.requested_protocol == "auto" {
@@ -115,11 +106,7 @@ fn execute_rest(
     let context = execution_context(invocation, target, selected_protocol);
     let client = RestClient::https(&target.host, port, &target.user, &target.password);
     let value = with_context(client.execute_request(request), context)?;
-    let payload = serde_json::to_string(&value).map_err(|error| {
-        Box::new(error::RosWireError::internal(format!(
-            "failed to serialize RouterOS REST response: {error}",
-        )))
-    })?;
+    let payload = render_protocol_payload(request, selected_protocol, &value)?;
     println!("{payload}");
 
     Ok(())
@@ -161,16 +148,64 @@ fn execute_classic_stream<S: ApiStream>(
     context: ErrorContext,
 ) -> RosWireResult<()> {
     let mut session = ClassicApiSession::new(stream);
+    let selected_protocol = context.selected_protocol.clone();
     with_context(session.login(user, password), context.clone())?;
     let rows = with_context(session.execute_request(request), context)?;
-    let payload = serde_json::to_string(&rows).map_err(|error| {
-        Box::new(error::RosWireError::internal(format!(
-            "failed to serialize RouterOS response: {error}",
-        )))
-    })?;
+    let payload = render_protocol_payload(request, &selected_protocol, &rows)?;
     println!("{payload}");
 
     Ok(())
+}
+
+#[derive(Debug, Serialize)]
+struct WriteSuccessPayload<'a, T: Serialize> {
+    schema_version: &'static str,
+    status: &'static str,
+    command: String,
+    action: &'static str,
+    selected_protocol: &'a str,
+    response: &'a T,
+}
+
+fn render_protocol_payload<T: Serialize>(
+    request: &ProtocolRequest,
+    selected_protocol: &str,
+    response: &T,
+) -> RosWireResult<String> {
+    if request.mapping.action_kind == ActionKind::Print {
+        return serialize_payload(response, "RouterOS response");
+    }
+
+    serialize_payload(
+        &WriteSuccessPayload {
+            schema_version: "roswire.write.v1",
+            status: "ok",
+            command: request_command_name(request),
+            action: request.mapping.action_kind.as_str(),
+            selected_protocol,
+            response,
+        },
+        "RouterOS write response",
+    )
+}
+
+fn serialize_payload<T: Serialize>(value: &T, label: &str) -> RosWireResult<String> {
+    serde_json::to_string(value).map_err(|error| {
+        Box::new(error::RosWireError::internal(format!(
+            "failed to serialize {label}: {error}",
+        )))
+    })
+}
+
+fn request_command_name(request: &ProtocolRequest) -> String {
+    request
+        .mapping
+        .cli_path
+        .iter()
+        .map(String::as_str)
+        .chain(std::iter::once(request.mapping.action_kind.as_str()))
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 struct LiveProtocolProbe<'a> {
@@ -469,30 +504,7 @@ fn execution_context(
     }
 }
 
-fn unsupported_action_context(cli: &Cli, invocation: &args::ParsedInvocation) -> ErrorContext {
-    ErrorContext {
-        command: unsupported_command_name(invocation),
-        path: invocation.path.clone(),
-        action: invocation.action.clone(),
-        requested_protocol: cli
-            .protocol
-            .map(|value| value.as_str().to_owned())
-            .unwrap_or_else(|| "auto".to_owned()),
-        selected_protocol: "unknown".to_owned(),
-        transfer_backend: cli.transfer.map(|value| value.as_str().to_owned()),
-        routeros_version: cli
-            .routeros_version
-            .map(|value| value.as_str().to_owned())
-            .unwrap_or_else(|| "auto".to_owned()),
-        host: cli
-            .host
-            .clone()
-            .or_else(|| std::env::var("ROS_HOST").ok())
-            .unwrap_or_default(),
-        resolved_args: error::redact_resolved_args(&invocation.resolved_args),
-    }
-}
-
+#[cfg(test)]
 fn unsupported_command_name(invocation: &args::ParsedInvocation) -> String {
     invocation
         .path
@@ -506,13 +518,14 @@ fn unsupported_command_name(invocation: &args::ParsedInvocation) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_probe_error, default_port, execution_context, parse_port,
+        classify_probe_error, default_port, execution_context, parse_port, render_protocol_payload,
         resolve_execution_target_with_env, routeros_major_from_rest_resource,
         routeros_major_from_version, unsupported_command_name, validate_protocol,
         validate_routeros_version, with_context, ExecutionTarget,
     };
     use crate::args::{Cli, ParsedInvocation};
     use crate::error::{ErrorCode, RosWireError};
+    use crate::mapping::build_protocol_request;
     use crate::protocol::{ProbeResult, RouterOsMajor};
     use clap::Parser;
     use std::collections::BTreeMap;
@@ -786,6 +799,28 @@ value = "v1:nonce:ciphertext"
             classify_probe_error(&RosWireError::ros_api_failure("trap")),
             ProbeResult::NetworkFailure,
         );
+    }
+
+    #[test]
+    fn write_payload_wraps_success_response_with_stable_metadata() {
+        let request = build_protocol_request(&ParsedInvocation {
+            path: vec!["ip".to_owned(), "address".to_owned()],
+            action: "add".to_owned(),
+            resolved_args: BTreeMap::from([
+                ("address".to_owned(), "192.0.2.10/24".to_owned()),
+                ("interface".to_owned(), "bridge".to_owned()),
+            ]),
+        })
+        .expect("write request should map");
+        let rows = Vec::<BTreeMap<String, String>>::new();
+
+        let payload =
+            render_protocol_payload(&request, "api-ssl", &rows).expect("payload should serialize");
+
+        assert!(payload.contains("\"schema_version\":\"roswire.write.v1\""));
+        assert!(payload.contains("\"command\":\"ip/address/add\""));
+        assert!(payload.contains("\"selected_protocol\":\"api-ssl\""));
+        assert!(payload.contains("\"response\":[]"));
     }
 
     #[test]
