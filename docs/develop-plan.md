@@ -68,7 +68,7 @@ roswire ip address remove .id=*1 --json
 | 选项 | 环境变量 | 说明 |
 | --- | --- | --- |
 | `--profile <name>` | `ROS_PROFILE` | 选择 `config.toml` 中的 profile；未设置时使用 `default_profile` |
-| `--host <host>` | `ROS_HOST` | RouterOS 地址或主机名 |
+| `--host <host>` | `ROS_HOST` | RouterOS IP 地址或 DNS 主机名；不支持 MAC 地址直连 |
 | `--user <user>` | `ROS_USER` | RouterOS 用户名 |
 | `--password <password>` | `ROS_PASSWORD` | RouterOS 密码；不推荐在 shell 历史记录中直接传入 |
 | `--protocol <mode>` | `ROS_PROTOCOL` | `auto`、`api`、`api-ssl` 或 `rest` |

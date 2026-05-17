@@ -166,6 +166,7 @@ fn resolve_execution_target_with_env(
                 "missing RouterOS host; set --host, ROS_HOST, or profile host",
             ))
         })?;
+    config::validate_remote_host(&host)?;
     let user = cli
         .user
         .clone()
@@ -411,6 +412,30 @@ value = "profile-value"
         assert_eq!(target.requested_protocol, "api-ssl");
         assert_eq!(target.routeros_version, "v7");
         assert_eq!(target.port, 8729);
+    }
+
+    #[test]
+    fn execution_target_rejects_mac_host_before_network() {
+        let (temp, env) = temp_home_env();
+        write_config(
+            temp.path(),
+            r#"
+version = 1
+default_profile = "studio"
+
+[profiles.studio]
+host = "48-8F-5A-A3-0E-A7"
+user = "profile-user"
+"#,
+        );
+        let cli = Cli::try_parse_from(["roswire", "interface", "print"]).expect("cli should parse");
+
+        let error = resolve_execution_target_with_env(&cli, &env)
+            .expect_err("MAC host should fail before any network connection");
+
+        assert_eq!(error.error_code, ErrorCode::ConfigError);
+        assert_eq!(error.context.host, "48-8F-5A-A3-0E-A7");
+        assert!(error.message.contains("MAC address"));
     }
 
     #[test]

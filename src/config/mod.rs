@@ -1,5 +1,5 @@
 use crate::args::Cli;
-use crate::error::{ErrorCode, RosWireError, RosWireResult};
+use crate::error::{ErrorCode, ErrorContext, RosWireError, RosWireResult};
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
@@ -150,6 +150,38 @@ pub fn load_config_file(path: &Path) -> RosWireResult<ConfigFile> {
         )))
     })?;
     parse_config_toml(&contents)
+}
+
+pub fn validate_remote_host(host: &str) -> RosWireResult<()> {
+    if is_mac_address(host) {
+        return Err(Box::new(
+            RosWireError::config(format!(
+                "RouterOS host must be an IP address or DNS name, not a MAC address: {host}"
+            ))
+            .with_hint(
+                "set host/ROS_HOST/--host to a routable IP address or DNS name; MAC-based Layer 2 discovery is not supported by this CLI",
+            )
+            .with_context(ErrorContext {
+                host: host.to_owned(),
+                ..ErrorContext::default()
+            }),
+        ));
+    }
+
+    Ok(())
+}
+
+pub fn is_mac_address(value: &str) -> bool {
+    let value = value.trim();
+    is_separated_mac_address(value, ':') || is_separated_mac_address(value, '-')
+}
+
+fn is_separated_mac_address(value: &str, separator: char) -> bool {
+    let parts = value.split(separator).collect::<Vec<_>>();
+    parts.len() == 6
+        && parts
+            .iter()
+            .all(|part| part.len() == 2 && part.chars().all(|ch| ch.is_ascii_hexdigit()))
 }
 
 pub fn select_active_profile(
@@ -755,6 +787,7 @@ fn handle_config_device(tokens: &[String]) -> RosWireResult<String> {
     for (key, value) in key_values {
         match key.as_str() {
             "host" => {
+                validate_remote_host(&value)?;
                 profile.host = Some(value);
                 updated_fields.push("host".to_owned());
             }
@@ -1196,6 +1229,27 @@ mod tests {
         let selected =
             select_active_profile(None, None, &config).expect("default profile should apply");
         assert_eq!(selected, "home");
+    }
+
+    #[test]
+    fn mac_host_detection_rejects_common_layer2_formats_only() {
+        assert!(is_mac_address("48:8F:5A:A3:0E:A7"));
+        assert!(is_mac_address("48-8f-5a-a3-0e-a7"));
+        assert!(!is_mac_address("192.0.2.1"));
+        assert!(!is_mac_address("router.example.test"));
+        assert!(!is_mac_address("2001:db8::1"));
+
+        validate_remote_host("router.example.test").expect("DNS host should be accepted");
+        let error =
+            validate_remote_host("48:8F:5A:A3:0E:A7").expect_err("MAC host should be rejected");
+
+        assert!(has_error_code(&error, ErrorCode::ConfigError));
+        assert_eq!(error.context.host, "48:8F:5A:A3:0E:A7");
+        assert!(error.message.contains("MAC address"));
+        assert!(error
+            .hint
+            .as_deref()
+            .is_some_and(|hint| hint.contains("Layer 2 discovery is not supported")));
     }
 
     #[test]

@@ -66,6 +66,29 @@ fn config_device_add_and_inspect_work() {
 }
 
 #[test]
+fn config_device_rejects_mac_host() {
+    let temp = tempfile::tempdir().expect("temp dir should be created");
+
+    run(&temp, &["config", "init", "--json"]).success();
+    run(
+        &temp,
+        &[
+            "config",
+            "device",
+            "add",
+            "studio",
+            "host=48-8F-5A-A3-0E-A7",
+            "user=master",
+            "--json",
+        ],
+    )
+    .failure()
+    .stdout(predicate::str::is_empty())
+    .stderr(predicate::str::contains("\"error_code\":\"CONFIG_ERROR\""))
+    .stderr(predicate::str::contains("MAC address"));
+}
+
+#[test]
 fn config_secret_set_supports_multiple_types_and_redacts_values() {
     let temp = tempfile::tempdir().expect("temp dir should be created");
 

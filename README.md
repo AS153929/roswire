@@ -128,7 +128,7 @@ roswire ip address remove .id=*1 --json
 | 变量 | 用途 |
 | --- | --- |
 | `ROS_PROFILE` | 选择 `~/.roswire/config.toml` 中的 profile |
-| `ROS_HOST` | RouterOS 主机名或 IP 地址 |
+| `ROS_HOST` | RouterOS 主机名或 IP 地址；不支持 MAC 地址直连 |
 | `ROS_USER` | RouterOS 用户名 |
 | `ROS_PASSWORD` | RouterOS 密码 |
 | `ROSWIRE_HOME` | 覆盖默认 `~/.roswire` 目录，主要用于测试或便携环境 |
@@ -228,6 +228,8 @@ roswire export download ./config.rsc --compact --ensure-ssh --allow-from 203.0.1
 - 写入 `/system/script`：如果只是把本地文本作为脚本 source，可以直接通过 API/REST 设置 `source=@local-file` 的内容，不必先上传成文件；需要限制大小并禁止二进制。
 
 文件传输只支持 SSH 通道。`roswire` 可以通过 API/REST 检查并配置 `/ip service ssh`：启用 SSH 服务、设置端口、把 `--allow-from` / `ROS_SSH_ALLOW_FROM` 写入服务的 `address` 白名单。默认不擅自打开 SSH；只有显式传入 `--ensure-ssh` 时才允许修改设备服务配置。传输结束后可以按策略恢复原始 SSH 服务状态。
+
+注意：`host` / `ROS_HOST` / `--host` 必须是可路由的 IP 地址或 DNS 名。RouterOS 的 MAC 地址只适用于二层发现/邻居发现场景，当前 CLI 的 API、REST 与 SSH 连接不支持 MAC 地址直连。
 
 实现阶段必须验证目标 RouterOS 版本实际支持的 SSH 文件传输子协议，并统一封装在 `ssh` transfer 后端下。不要默认假设 REST API 支持 multipart 上传，也不要保留 FTP、`/tool fetch` 等其它文件传输后端。
 

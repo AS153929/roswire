@@ -1,4 +1,5 @@
 use crate::args::Cli;
+use crate::config;
 use crate::error::{self, ErrorContext, RosWireError, RosWireResult};
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -156,6 +157,14 @@ fn build_plan_for_env(
     cli: &Cli,
     env: &BTreeMap<String, String>,
 ) -> RosWireResult<TransferPlan> {
+    if let Some(host) = cli
+        .host
+        .as_deref()
+        .or_else(|| env.get("ROS_HOST").map(String::as_str))
+    {
+        config::validate_remote_host(host)?;
+    }
+
     let backend = resolve_transfer_backend(cli, env)?;
     if backend != DEFAULT_TRANSFER_BACKEND {
         return Err(Box::new(RosWireError::usage(format!(
