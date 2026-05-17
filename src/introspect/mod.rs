@@ -125,6 +125,7 @@ fn help_payload(tokens: &[String]) -> RosWireResult<String> {
                 "--json".to_owned(),
                 "--debug".to_owned(),
                 "--include-remote".to_owned(),
+                "--refresh".to_owned(),
                 "--source".to_owned(),
                 "--allow-write".to_owned(),
             ],
@@ -199,8 +200,18 @@ fn remote_schema_payload(tokens: &[String], cli: &Cli) -> RosWireResult<String> 
         ),
     };
 
-    let snapshot =
-        discovery::degraded_remote_schema_snapshot(&profile, &fingerprint, policies, warning);
+    let cache_status = if cli.refresh {
+        cache::CacheLookupStatus::Refresh
+    } else {
+        cache::CacheLookupStatus::Miss
+    };
+    let snapshot = discovery::degraded_remote_schema_snapshot_with_cache_status(
+        &profile,
+        &fingerprint,
+        policies,
+        warning,
+        cache_status,
+    );
     render_json(&snapshot)
 }
 
@@ -788,6 +799,39 @@ fn catalog() -> Vec<CommandDefinition> {
             }],
             examples: vec!["roswire schema command ip address add --json".to_owned()],
             errors: vec!["SCHEMA_UNAVAILABLE".to_owned(), "USAGE_ERROR".to_owned()],
+        },
+        CommandDefinition {
+            name: "schema discover".to_owned(),
+            summary: "Discover remote schema overlay with cache TTL metadata.".to_owned(),
+            kind: "introspection".to_owned(),
+            syntax: "roswire schema discover --remote [--refresh] --json".to_owned(),
+            arguments: vec![
+                ArgumentSpec {
+                    name: "--remote".to_owned(),
+                    style: "flag".to_owned(),
+                    required: true,
+                    arg_type: "bool".to_owned(),
+                    description: "Enable remote schema discovery.".to_owned(),
+                    example: Some("--remote".to_owned()),
+                },
+                ArgumentSpec {
+                    name: "--refresh".to_owned(),
+                    style: "flag".to_owned(),
+                    required: false,
+                    arg_type: "bool".to_owned(),
+                    description: "Bypass cached remote schema metadata and mark the cache status as refresh.".to_owned(),
+                    example: Some("--refresh".to_owned()),
+                },
+            ],
+            examples: vec![
+                "roswire schema discover --remote --json".to_owned(),
+                "roswire schema discover --remote --refresh --json".to_owned(),
+            ],
+            errors: vec![
+                "USAGE_ERROR".to_owned(),
+                "CONFIG_ERROR".to_owned(),
+                "REMOTE_SCHEMA_UNAVAILABLE".to_owned(),
+            ],
         },
     ]
 }

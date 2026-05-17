@@ -169,8 +169,8 @@
 - [x] cache 中不写入 secret
 - [x] doctor 本地配置/权限/依赖检查
 - [x] doctor 远端协议与错误分类检查
-- [ ] schema cache TTL / refresh 策略完整产品化
-- [ ] 更多 RouterOS 菜单的远端字段/枚举覆盖（已覆盖 system package print 的静态字段，#73）
+- [x] schema cache TTL / refresh 策略完整产品化（#64）
+- [x] 更多 RouterOS 菜单的远端字段/枚举覆盖（静态字段 + runtime hint 来源标记，#64）
 
 ## SSH/SFTP 文件传输
 
@@ -334,7 +334,7 @@
 - #61 `M8: 发布工程与安装文档`
 - #62 `M8: 多平台 keychain smoke 测试`
 - #63 `M8: 定义生产级稳定版验收门槛`
-- #64 `M7: 扩展远端 schema cache TTL/refresh 与菜单 overlay`
+- #64 `M7: 扩展远端 schema cache TTL/refresh 与菜单 overlay`（完成：hit/miss/stale/refresh 决策、`--refresh`、overlay enum 来源标记）
 - #65 `M7: 实现 SSH 服务 ensure/restore 与白名单合并`
 - #66 `M7: 增强文件工作流覆盖策略、超时与重试`
 - #67 `M7: 实现 SCP fallback 与加密 SSH 私钥 passphrase 支持`

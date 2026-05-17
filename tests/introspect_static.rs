@@ -27,6 +27,15 @@ fn commands_json_contains_catalog_entries() {
 }
 
 #[test]
+fn help_index_lists_refresh_option() {
+    let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
+    cmd.args(["help", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--refresh"));
+}
+
+#[test]
 fn help_topic_returns_command_details() {
     let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
     cmd.args(["help", "ip", "address", "add", "--json"])
@@ -474,8 +483,26 @@ fn schema_discover_remote_returns_degraded_snapshot_without_config() {
             "\"schema_version\":\"roswire.remote.schema.v1\"",
         ))
         .stdout(predicate::str::contains("\"cache_key\":\"cache:"))
+        .stdout(predicate::str::contains("\"status\":\"miss\""))
         .stdout(predicate::str::contains("CONFIG_ERROR"))
         .stdout(predicate::str::contains("ip address print"));
+}
+
+#[test]
+fn schema_discover_remote_refresh_marks_cache_status() {
+    let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
+    let temp = tempfile::tempdir().expect("temp dir should be created");
+    cmd.env("ROSWIRE_HOME", temp.path().join("missing-home"));
+    cmd.args(["schema", "discover", "--remote", "--refresh", "--json"])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty())
+        .stdout(predicate::str::contains(
+            "\"schema_version\":\"roswire.remote.schema.v1\"",
+        ))
+        .stdout(predicate::str::contains("\"status\":\"refresh\""))
+        .stdout(predicate::str::contains("\"runtime_value_hints\""))
+        .stdout(predicate::str::contains("not_exhaustive"));
 }
 
 #[test]
@@ -561,7 +588,8 @@ fn schema_command_remote_firewall_has_static_fields() {
         "\"name\":\"ip firewall nat print\"",
     ))
     .stdout(predicate::str::contains("\"chain\""))
-    .stdout(predicate::str::contains("\"to-addresses\""));
+    .stdout(predicate::str::contains("\"to-addresses\""))
+    .stdout(predicate::str::contains("static_catalog_hint"));
 }
 
 #[test]

@@ -1,4 +1,6 @@
-use crate::introspect::cache::{compute_cache_key, DeviceFingerprint};
+use crate::introspect::cache::{
+    compute_cache_key, CacheLookupStatus, DeviceFingerprint, DEFAULT_REMOTE_SCHEMA_TTL_SECONDS,
+};
 use crate::introspect::CommandDefinition;
 use crate::{args::ParsedInvocation, error::ErrorCode};
 use serde::Serialize;
@@ -9,12 +11,19 @@ pub struct RemoteOverlayCommand {
     pub name: String,
     pub support: String,
     pub output_fields_observed: Vec<String>,
-    pub runtime_value_hints: BTreeMap<String, Vec<String>>,
+    pub runtime_value_hints: BTreeMap<String, RuntimeValueHint>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attempted_side_effects_override: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attempted_idempotency_override: Option<String>,
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct RuntimeValueHint {
+    pub values: Vec<String>,
+    pub source: String,
+    pub completeness: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -32,7 +41,7 @@ pub struct MergedCommand {
     pub side_effects: Vec<String>,
     pub idempotency: String,
     pub output_fields_observed: Vec<String>,
-    pub runtime_value_hints: BTreeMap<String, Vec<String>>,
+    pub runtime_value_hints: BTreeMap<String, RuntimeValueHint>,
     pub warnings: Vec<String>,
 }
 
@@ -81,7 +90,7 @@ pub fn remote_schema_unavailable_snapshot(
         device: fingerprint.clone(),
         cache: RemoteSchemaCacheStatus {
             status: "unavailable".to_owned(),
-            ttl_seconds: 604_800,
+            ttl_seconds: DEFAULT_REMOTE_SCHEMA_TTL_SECONDS,
             cache_key: compute_cache_key(profile, fingerprint),
         },
         commands: Vec::new(),
@@ -95,6 +104,22 @@ pub fn degraded_remote_schema_snapshot(
     policies: Vec<StaticCommandPolicy>,
     warning: impl Into<String>,
 ) -> RemoteSchemaSnapshot {
+    degraded_remote_schema_snapshot_with_cache_status(
+        profile,
+        fingerprint,
+        policies,
+        warning,
+        CacheLookupStatus::Miss,
+    )
+}
+
+pub fn degraded_remote_schema_snapshot_with_cache_status(
+    profile: &str,
+    fingerprint: &DeviceFingerprint,
+    policies: Vec<StaticCommandPolicy>,
+    warning: impl Into<String>,
+    cache_status: CacheLookupStatus,
+) -> RemoteSchemaSnapshot {
     let warning = warning.into();
     let commands = policies
         .into_iter()
@@ -103,7 +128,7 @@ pub fn degraded_remote_schema_snapshot(
                 name: policy.name.clone(),
                 support: "unknown".to_owned(),
                 output_fields_observed: static_output_fields(&policy.name),
-                runtime_value_hints: BTreeMap::new(),
+                runtime_value_hints: static_runtime_value_hints(&policy.name),
                 attempted_side_effects_override: None,
                 attempted_idempotency_override: None,
                 warnings: vec![warning.clone()],
@@ -118,13 +143,44 @@ pub fn degraded_remote_schema_snapshot(
         profile: profile.to_owned(),
         device: fingerprint.clone(),
         cache: RemoteSchemaCacheStatus {
-            status: "miss".to_owned(),
-            ttl_seconds: 604_800,
+            status: cache_status.as_str().to_owned(),
+            ttl_seconds: DEFAULT_REMOTE_SCHEMA_TTL_SECONDS,
             cache_key: compute_cache_key(profile, fingerprint),
         },
         commands,
         warnings: vec![warning],
     }
+}
+
+fn static_runtime_value_hints(command: &str) -> BTreeMap<String, RuntimeValueHint> {
+    let hints: &[(&str, &[&str])] = match command {
+        "ip firewall filter print" => &[
+            ("chain", &["input", "forward", "output"]),
+            ("action", &["accept", "drop", "reject"]),
+        ],
+        "ip firewall nat print" => &[
+            ("chain", &["srcnat", "dstnat"]),
+            ("action", &["masquerade", "dst-nat", "src-nat"]),
+        ],
+        "ip route print" => &[("routing-table", &["main"])],
+        "tool netwatch print" => &[("status", &["up", "down", "unknown"])],
+        "user print" => &[("group", &["full", "read", "write"])],
+        _ => &[],
+    };
+
+    hints
+        .iter()
+        .map(|(field, values)| {
+            (
+                (*field).to_owned(),
+                RuntimeValueHint {
+                    values: values.iter().map(|value| (*value).to_owned()).collect(),
+                    source: "static_catalog_hint".to_owned(),
+                    completeness: "not_exhaustive".to_owned(),
+                },
+            )
+        })
+        .collect()
 }
 
 pub fn policy_from_command(command: &CommandDefinition) -> Option<StaticCommandPolicy> {
@@ -282,12 +338,13 @@ fn static_output_fields(command: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        degraded_remote_schema_snapshot, merge_overlay, policies_from_catalog,
-        remote_schema_unavailable_snapshot, unknown_fingerprint, warning_name,
-        RemoteOverlayCommand, StaticCommandPolicy,
+        degraded_remote_schema_snapshot, degraded_remote_schema_snapshot_with_cache_status,
+        merge_overlay, policies_from_catalog, remote_schema_unavailable_snapshot,
+        unknown_fingerprint, warning_name, RemoteOverlayCommand, RuntimeValueHint,
+        StaticCommandPolicy,
     };
     use crate::error::ErrorCode;
-    use crate::introspect::cache::{hash_host_id, DeviceFingerprint};
+    use crate::introspect::cache::{hash_host_id, CacheLookupStatus, DeviceFingerprint};
     use crate::introspect::CommandDefinition;
     use std::collections::BTreeMap;
 
@@ -316,7 +373,11 @@ mod tests {
             output_fields_observed: vec![".id".to_owned(), "address".to_owned()],
             runtime_value_hints: BTreeMap::from([(
                 "interface".to_owned(),
-                vec!["bridge".to_owned(), "ether1".to_owned()],
+                RuntimeValueHint {
+                    values: vec!["bridge".to_owned(), "ether1".to_owned()],
+                    source: "remote_observed".to_owned(),
+                    completeness: "not_exhaustive".to_owned(),
+                },
             )]),
             attempted_side_effects_override: Some(vec!["none".to_owned()]),
             attempted_idempotency_override: Some("idempotent".to_owned()),
@@ -329,8 +390,11 @@ mod tests {
         assert_eq!(merged.idempotency, "not-idempotent");
         assert_eq!(merged.support, "supported");
         assert_eq!(
-            merged.runtime_value_hints.get("interface"),
-            Some(&vec!["bridge".to_owned(), "ether1".to_owned()])
+            merged
+                .runtime_value_hints
+                .get("interface")
+                .map(|hint| hint.source.as_str()),
+            Some("remote_observed")
         );
     }
 
@@ -365,6 +429,7 @@ mod tests {
         );
 
         assert_eq!(snapshot.cache.status, "miss");
+        assert_eq!(snapshot.cache.ttl_seconds, 604_800);
         assert!(!snapshot.cache.cache_key.contains("198.51.100.10"));
         assert_eq!(snapshot.commands[0].support, "unknown");
         assert_eq!(
@@ -373,6 +438,49 @@ mod tests {
         );
         assert_eq!(snapshot.commands[0].idempotency, "not-idempotent");
         assert!(snapshot.warnings.iter().any(|item| item == "NETWORK_ERROR"));
+    }
+
+    #[test]
+    fn degraded_snapshot_can_report_refresh_cache_status() {
+        let fp = unknown_fingerprint("198.51.100.10", "unknown");
+        let policies = vec![StaticCommandPolicy {
+            name: "ip address print".to_owned(),
+            side_effects: Vec::new(),
+            idempotency: "read-only".to_owned(),
+        }];
+
+        let snapshot = degraded_remote_schema_snapshot_with_cache_status(
+            "studio",
+            &fp,
+            policies,
+            warning_name(ErrorCode::ConfigError),
+            CacheLookupStatus::Refresh,
+        );
+
+        assert_eq!(snapshot.cache.status, "refresh");
+        assert!(snapshot.warnings.iter().any(|item| item == "CONFIG_ERROR"));
+    }
+
+    #[test]
+    fn degraded_snapshot_does_not_include_plain_host_or_username() {
+        let fp = unknown_fingerprint("203.0.113.42", "rest");
+        let policies = vec![StaticCommandPolicy {
+            name: "ip address print".to_owned(),
+            side_effects: Vec::new(),
+            idempotency: "read-only".to_owned(),
+        }];
+
+        let snapshot = degraded_remote_schema_snapshot(
+            "studio",
+            &fp,
+            policies,
+            warning_name(ErrorCode::NetworkError),
+        );
+        let json = serde_json::to_string(&snapshot).expect("snapshot should serialize");
+
+        assert!(!json.contains("203.0.113.42"));
+        assert!(!json.contains("admin"));
+        assert!(json.contains(&fp.host_id_hashed));
     }
 
     #[test]
@@ -530,6 +638,13 @@ mod tests {
         assert!(snapshot.commands[1]
             .output_fields_observed
             .contains(&"chain".to_owned()));
+        assert_eq!(
+            snapshot.commands[1]
+                .runtime_value_hints
+                .get("chain")
+                .map(|hint| hint.completeness.as_str()),
+            Some("not_exhaustive")
+        );
         assert_eq!(snapshot.commands[2].name, "ip firewall nat print");
         assert!(snapshot.commands[2]
             .output_fields_observed

@@ -352,10 +352,7 @@ fn local_dependencies() -> BTreeMap<String, String> {
             "ssh_transfer_runtime".to_owned(),
             "not_implemented".to_owned(),
         ),
-        (
-            "remote_schema_overlay".to_owned(),
-            "not_implemented".to_owned(),
-        ),
+        ("remote_schema_overlay".to_owned(), "available".to_owned()),
     ])
 }
 
@@ -427,6 +424,12 @@ mod tests {
         assert_eq!(
             dependencies.get("ssh_transfer_runtime").map(String::as_str),
             Some("not_implemented"),
+        );
+        assert_eq!(
+            dependencies
+                .get("remote_schema_overlay")
+                .map(String::as_str),
+            Some("available"),
         );
     }
 

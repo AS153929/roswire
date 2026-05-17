@@ -102,6 +102,10 @@ pub struct Cli {
     #[arg(long)]
     pub remote: bool,
 
+    /// Force remote schema discovery to bypass cached schema metadata.
+    #[arg(long)]
+    pub refresh: bool,
+
     /// Build a plan without connecting to or modifying RouterOS.
     #[arg(long = "dry-run")]
     pub dry_run: bool,
@@ -283,9 +287,20 @@ mod tests {
 
         assert_eq!(cli.protocol, Some(ProtocolMode::Rest));
         assert!(!cli.remote);
+        assert!(!cli.refresh);
         assert!(!cli.dry_run);
         assert!(!cli.include_remote);
         assert!(!cli.stdin);
+    }
+
+    #[test]
+    fn supports_remote_schema_refresh_flag() {
+        let cli = Cli::try_parse_from(["roswire", "schema", "discover", "--remote", "--refresh"])
+            .expect("refresh flag should parse");
+
+        assert!(cli.remote);
+        assert!(cli.refresh);
+        assert_eq!(cli.tokens, vec!["schema", "discover"]);
     }
 
     #[test]

@@ -2,6 +2,8 @@ use serde::Serialize;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
+pub const DEFAULT_REMOTE_SCHEMA_TTL_SECONDS: u64 = 604_800;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DeviceFingerprint {
     pub host_id_hashed: String,
@@ -20,6 +22,33 @@ pub struct CacheMeta {
     pub created_unix: u64,
     pub ttl_seconds: u64,
     pub fingerprint: DeviceFingerprint,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum CacheLookupStatus {
+    Hit,
+    Miss,
+    Stale,
+    Refresh,
+}
+
+impl CacheLookupStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Hit => "hit",
+            Self::Miss => "miss",
+            Self::Stale => "stale",
+            Self::Refresh => "refresh",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CacheLookup {
+    pub status: CacheLookupStatus,
+    pub should_refresh: bool,
+    pub cache_key: String,
+    pub ttl_seconds: u64,
 }
 
 pub fn hash_host_id(host: &str) -> String {
@@ -70,10 +99,40 @@ pub fn is_cache_stale(meta: &CacheMeta, now_unix: u64, current: &DeviceFingerpri
     meta.cache_key != current_key
 }
 
+pub fn evaluate_cache_lookup(
+    profile_name: &str,
+    cached: Option<&CacheMeta>,
+    now_unix: u64,
+    current: &DeviceFingerprint,
+    refresh_requested: bool,
+) -> CacheLookup {
+    let status = if refresh_requested {
+        CacheLookupStatus::Refresh
+    } else {
+        match cached {
+            None => CacheLookupStatus::Miss,
+            Some(meta) if is_cache_stale(meta, now_unix, current) => CacheLookupStatus::Stale,
+            Some(_) => CacheLookupStatus::Hit,
+        }
+    };
+
+    let ttl_seconds = cached
+        .map(|meta| meta.ttl_seconds)
+        .unwrap_or(DEFAULT_REMOTE_SCHEMA_TTL_SECONDS);
+
+    CacheLookup {
+        status,
+        should_refresh: !matches!(status, CacheLookupStatus::Hit),
+        cache_key: compute_cache_key(profile_name, current),
+        ttl_seconds,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        compute_cache_key, hash_host_id, is_cache_stale, new_cache_meta, DeviceFingerprint,
+        compute_cache_key, evaluate_cache_lookup, hash_host_id, is_cache_stale, new_cache_meta,
+        CacheLookupStatus, DeviceFingerprint, DEFAULT_REMOTE_SCHEMA_TTL_SECONDS,
     };
 
     fn fingerprint(version: &str) -> DeviceFingerprint {
@@ -126,5 +185,59 @@ mod tests {
         let meta = new_cache_meta("home", 100, 600, fp.clone());
 
         assert!(!is_cache_stale(&meta, 200, &fp));
+    }
+
+    #[test]
+    fn cache_lookup_reports_miss_without_cached_meta() {
+        let fp = fingerprint("7.15.3");
+        let lookup = evaluate_cache_lookup("home", None, 200, &fp, false);
+
+        assert_eq!(lookup.status, CacheLookupStatus::Miss);
+        assert!(lookup.should_refresh);
+        assert_eq!(lookup.ttl_seconds, DEFAULT_REMOTE_SCHEMA_TTL_SECONDS);
+        assert!(lookup.cache_key.starts_with("cache:"));
+    }
+
+    #[test]
+    fn cache_lookup_reports_hit_for_fresh_meta() {
+        let fp = fingerprint("7.15.3");
+        let meta = new_cache_meta("home", 100, 600, fp.clone());
+        let lookup = evaluate_cache_lookup("home", Some(&meta), 200, &fp, false);
+
+        assert_eq!(lookup.status, CacheLookupStatus::Hit);
+        assert!(!lookup.should_refresh);
+        assert_eq!(lookup.cache_key, meta.cache_key);
+    }
+
+    #[test]
+    fn cache_lookup_reports_stale_for_ttl_or_fingerprint_change() {
+        let fp = fingerprint("7.15.3");
+        let stale_by_ttl = new_cache_meta("home", 100, 10, fp.clone());
+        let stale_by_fingerprint = new_cache_meta("home", 100, 600, fp.clone());
+
+        let ttl_lookup = evaluate_cache_lookup("home", Some(&stale_by_ttl), 111, &fp, false);
+        let fingerprint_lookup = evaluate_cache_lookup(
+            "home",
+            Some(&stale_by_fingerprint),
+            200,
+            &fingerprint("7.15.4"),
+            false,
+        );
+
+        assert_eq!(ttl_lookup.status, CacheLookupStatus::Stale);
+        assert_eq!(fingerprint_lookup.status, CacheLookupStatus::Stale);
+        assert!(ttl_lookup.should_refresh);
+        assert!(fingerprint_lookup.should_refresh);
+    }
+
+    #[test]
+    fn cache_lookup_reports_refresh_when_requested() {
+        let fp = fingerprint("7.15.3");
+        let meta = new_cache_meta("home", 100, 600, fp.clone());
+        let lookup = evaluate_cache_lookup("home", Some(&meta), 200, &fp, true);
+
+        assert_eq!(lookup.status, CacheLookupStatus::Refresh);
+        assert!(lookup.should_refresh);
+        assert_eq!(lookup.cache_key, meta.cache_key);
     }
 }
