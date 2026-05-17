@@ -621,8 +621,8 @@ fn build_plan_for_env(
     let context = transfer_context(&command, &backend, cli, env);
     if !cli.dry_run {
         return Err(Box::new(
-            RosWireError::unsupported_action(
-                "real SSH file transfer is not implemented yet; rerun with --dry-run --json",
+            RosWireError::usage(
+                "transfer plan generation requires --dry-run; omit --dry-run to execute the SSH transfer runtime",
             )
             .with_context(context),
         ));
@@ -1890,6 +1890,28 @@ target = "password"
         assert_eq!(error.error_code, ErrorCode::SshHostKeyRequired);
         assert_eq!(error.context.transfer_backend.as_deref(), Some("ssh"));
         assert_eq!(error.context.command, "file/download");
+    }
+
+    #[test]
+    fn non_dry_run_plan_error_does_not_claim_runtime_is_unimplemented() {
+        let cli = Cli::try_parse_from([
+            "roswire",
+            "file",
+            "download",
+            "flash/setup.rsc",
+            "setup.rsc",
+        ])
+        .expect("cli should parse");
+        let command = parse_transfer_command(&cli.tokens)
+            .expect("transfer command should be detected")
+            .expect("transfer command should parse");
+
+        let error = build_plan_for_env(command, &cli, &isolated_env())
+            .expect_err("plan builder should require dry-run");
+
+        assert_eq!(error.error_code, ErrorCode::UsageError);
+        assert!(error.message.contains("requires --dry-run"));
+        assert!(!error.message.contains("not implemented"));
     }
 
     #[test]

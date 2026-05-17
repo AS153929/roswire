@@ -2,7 +2,7 @@
 
 > 最后更新：2026-05-17
 > 基准分支：`main`
-> 当前 GitHub open issues：`0`
+> 已创建 backlog issues：`#60`-`#76`
 
 本文用于快速追踪 `roswire` 的功能完成度。已完成项使用 `[x]` 标记；未完成或仍需真机验证/扩展的项使用 `[ ]` 标记。
 
@@ -317,7 +317,7 @@
 ## 当前判断
 
 - [x] MVP 功能闭环完成
-- [x] 规划 issue 队列清零
+- [x] MVP 规划 issue 队列清零
 - [x] 可以进入 Beta 试用与真机验收
 - [ ] 可以声明生产级稳定版
 
@@ -326,7 +326,7 @@
 - [x] 创建真机验收 issue：RouterOS v6 / v7 / REST / API / API-SSL / SSH/SFTP 矩阵（#60）
 - [x] 创建命令覆盖扩展 issue：优先 `/ip/firewall`、`/ip/route`、`/interface/wireguard`（#70-#75）
 - [x] 创建发布工程 issue：release workflow、checksum、安装文档（#61）
-- [ ] 清理旧防御性文案，避免误导“SSH transfer 未实现”（#76）
+- [x] 清理旧防御性文案，避免误导 SSH transfer 运行时状态（#76）
 
 ## Backlog issue 对照
 

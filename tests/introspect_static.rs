@@ -93,6 +93,8 @@ fn doctor_include_remote_reports_remote_error_in_json() {
 fn doctor_api_ssl_uses_tls_transport_path() {
     let temp = tempfile::tempdir().expect("temp dir should be created");
     let credential = generated_credential();
+    let legacy_tls_placeholder =
+        format!("{} {}", "api-ssl TLS transport is not", "implemented yet");
     let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
     cmd.env("ROSWIRE_HOME", temp.path().join("missing-home"));
     cmd.args([
@@ -118,7 +120,7 @@ fn doctor_api_ssl_uses_tls_transport_path() {
         "\"selected_protocol\":\"api-ssl\"",
     ))
     .stdout(predicate::str::contains("\"error_code\":\"NETWORK_ERROR\""))
-    .stdout(predicate::str::contains("api-ssl TLS transport is not implemented yet").not())
+    .stdout(predicate::str::contains(legacy_tls_placeholder).not())
     .stdout(predicate::str::contains(&credential).not());
 }
 
