@@ -269,6 +269,31 @@ mod tests {
     }
 
     #[test]
+    fn rest_ip_route_print_reads_json_array() {
+        let server = TestServer::responding_with(
+            200,
+            "application/json",
+            r#"[{".id":"*1","dst-address":"0.0.0.0/0","gateway":"192.0.2.1"}]"#,
+        );
+        let credential = test_credential();
+        let client = RestClient::with_base_url(server.base_url(), "admin", &credential);
+        let request = build_protocol_request(&ParsedInvocation {
+            path: vec!["ip".to_owned(), "route".to_owned()],
+            action: "print".to_owned(),
+            resolved_args: BTreeMap::new(),
+        })
+        .expect("request should map");
+
+        let value = client
+            .execute_request(&request)
+            .expect("REST route print should work");
+        let http_request = server.request();
+
+        assert_eq!(value[0]["gateway"], "192.0.2.1");
+        assert!(http_request.contains("GET /rest/ip/route HTTP/1.1"));
+    }
+
+    #[test]
     fn rest_system_package_print_reads_json_array() {
         let server = TestServer::responding_with(
             200,

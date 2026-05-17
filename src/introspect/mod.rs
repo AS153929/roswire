@@ -372,6 +372,21 @@ fn catalog() -> Vec<CommandDefinition> {
             ],
         },
         CommandDefinition {
+            name: "ip route print".to_owned(),
+            summary: "Print RouterOS IP routes, including v6/v7 route table fields when present."
+                .to_owned(),
+            kind: "routeros-command".to_owned(),
+            syntax: "roswire ip route print --json".to_owned(),
+            arguments: vec![],
+            examples: vec!["roswire ip route print --json".to_owned()],
+            errors: vec![
+                "USAGE_ERROR".to_owned(),
+                "AUTH_FAILED".to_owned(),
+                "NETWORK_ERROR".to_owned(),
+                "ROS_API_FAILURE".to_owned(),
+            ],
+        },
+        CommandDefinition {
             name: "interface print".to_owned(),
             summary: "Print interface list.".to_owned(),
             kind: "routeros-command".to_owned(),

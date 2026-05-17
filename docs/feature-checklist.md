@@ -106,7 +106,7 @@
 - [x] 写操作返回稳定 `roswire.write.v1` payload
 - [x] 不支持的命令/action 返回 `UNSUPPORTED_ACTION`
 - [ ] `/ip/firewall` 命令族
-- [ ] `/ip/route` 命令族
+- [x] `/ip/route` 命令族（print，#71）
 - [ ] `/interface/wireguard` 命令族
 - [x] `/system/package` 命令族（print，#73）
 - [x] `/user` 命令族（print，#74）
@@ -341,7 +341,7 @@
 - #68 `M7: 实现 system script put 工作流`
 - #69 `M7: 实现 RouterOS raw command passthrough`
 - #70 `M7: 扩展 /ip/firewall 命令族`
-- #71 `M7: 扩展 /ip/route 命令族`
+- #71 `M7: 扩展 /ip/route 命令族`（完成：print）
 - #72 `M7: 扩展 /interface/wireguard 命令族`
 - #73 `M7: 扩展 /system/package 命令族`（完成：print）
 - #74 `M7: 扩展 /user 命令族`（完成：print）

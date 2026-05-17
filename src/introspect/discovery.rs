@@ -201,6 +201,17 @@ fn static_output_fields(command: &str) -> Vec<String> {
             "interface".to_owned(),
             "disabled".to_owned(),
         ],
+        "ip route print" => vec![
+            ".id".to_owned(),
+            "dst-address".to_owned(),
+            "gateway".to_owned(),
+            "distance".to_owned(),
+            "routing-table".to_owned(),
+            "pref-src".to_owned(),
+            "active".to_owned(),
+            "dynamic".to_owned(),
+            "disabled".to_owned(),
+        ],
         _ => Vec::new(),
     }
 }
@@ -382,6 +393,40 @@ mod tests {
                 "address",
                 "disabled",
                 "last-logged-in"
+            ]
+        );
+    }
+
+    #[test]
+    fn degraded_snapshot_includes_ip_route_static_fields() {
+        let fp = unknown_fingerprint("198.51.100.10", "unknown");
+        let policies = vec![StaticCommandPolicy {
+            name: "ip route print".to_owned(),
+            side_effects: Vec::new(),
+            idempotency: "read-only".to_owned(),
+        }];
+
+        let snapshot = degraded_remote_schema_snapshot(
+            "studio",
+            &fp,
+            policies,
+            warning_name(ErrorCode::ConfigError),
+        );
+
+        assert_eq!(snapshot.commands[0].name, "ip route print");
+        assert_eq!(snapshot.commands[0].idempotency, "read-only");
+        assert_eq!(
+            snapshot.commands[0].output_fields_observed,
+            vec![
+                ".id",
+                "dst-address",
+                "gateway",
+                "distance",
+                "routing-table",
+                "pref-src",
+                "active",
+                "dynamic",
+                "disabled"
             ]
         );
     }

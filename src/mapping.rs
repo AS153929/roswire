@@ -193,6 +193,14 @@ pub fn resolve_mapping(invocation: &ParsedInvocation) -> RosWireResult<CommandMa
                 path: "/rest/ip/address/{.id}".to_owned(),
             }),
         )),
+        (["ip", "route"], "print") => Ok(print_mapping(
+            &["ip", "route"],
+            "/ip/route/print",
+            Some(RestMapping {
+                method: RestMethod::Get,
+                path: "/rest/ip/route".to_owned(),
+            }),
+        )),
         (["system", "resource"], "print") => Ok(print_mapping(
             &["system", "resource"],
             "/system/resource/print",
@@ -384,6 +392,24 @@ mod tests {
             vec!["deletes-routeros-record".to_owned()],
         );
         assert_eq!(remove.idempotency, "not-idempotent");
+    }
+
+    #[test]
+    fn maps_ip_route_print_as_read_only_with_rest_support() {
+        let route = resolve_mapping(&invocation(&["ip", "route"], "print", &[]))
+            .expect("ip route print should resolve");
+
+        assert_eq!(route.action_kind, ActionKind::Print);
+        assert_eq!(route.routeros_path, "/ip/route/print");
+        assert!(route.side_effects.is_empty());
+        assert_eq!(route.idempotency, "read-only");
+        assert_eq!(
+            route
+                .rest_mapping
+                .as_ref()
+                .map(|rest| (&rest.method, rest.path.as_str())),
+            Some((&RestMethod::Get, "/rest/ip/route")),
+        );
     }
 
     #[test]
