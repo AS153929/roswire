@@ -218,6 +218,34 @@ mod tests {
     }
 
     #[test]
+    fn auto_skips_rest_when_resource_probe_reports_v6() {
+        let probe = FakeProbe {
+            responses: BTreeMap::from([
+                (
+                    SelectedProtocol::Rest,
+                    ProbeResult::Success {
+                        routeros_major: RouterOsMajor::V6,
+                        rest_supported_for_action: true,
+                    },
+                ),
+                (
+                    SelectedProtocol::Api,
+                    ProbeResult::Success {
+                        routeros_major: RouterOsMajor::V6,
+                        rest_supported_for_action: false,
+                    },
+                ),
+            ]),
+        };
+
+        let decision = route_protocol(RequestedProtocol::Auto, true, None, &probe)
+            .expect("auto should skip REST for RouterOS v6");
+
+        assert_eq!(decision.selected_protocol, SelectedProtocol::Api);
+        assert_eq!(decision.routeros_major, RouterOsMajor::V6);
+    }
+
+    #[test]
     fn explicit_protocol_is_not_overridden() {
         let probe = FakeProbe {
             responses: BTreeMap::from([(
@@ -232,6 +260,23 @@ mod tests {
         let decision = route_protocol(RequestedProtocol::Api, true, None, &probe)
             .expect("explicit api should succeed");
         assert_eq!(decision.selected_protocol, SelectedProtocol::Api);
+    }
+
+    #[test]
+    fn explicit_protocol_errors_are_structured() {
+        let auth_probe = FakeProbe {
+            responses: BTreeMap::from([(SelectedProtocol::Rest, ProbeResult::AuthFailed)]),
+        };
+        let auth_error = route_protocol(RequestedProtocol::Rest, true, None, &auth_probe)
+            .expect_err("explicit auth failure should fail");
+        assert_eq!(auth_error.error_code, ErrorCode::AuthFailed);
+
+        let network_probe = FakeProbe {
+            responses: BTreeMap::from([(SelectedProtocol::ApiSsl, ProbeResult::NetworkFailure)]),
+        };
+        let network_error = route_protocol(RequestedProtocol::ApiSsl, true, None, &network_probe)
+            .expect_err("explicit network failure should fail");
+        assert_eq!(network_error.error_code, ErrorCode::NetworkError);
     }
 
     #[test]
@@ -254,5 +299,21 @@ mod tests {
         let error = route_protocol(RequestedProtocol::Auto, true, Some(443), &probe)
             .expect_err("auto + port should be rejected");
         assert_eq!(error.error_code, ErrorCode::ConfigError);
+    }
+
+    #[test]
+    fn auto_reports_network_error_after_all_candidates_fail() {
+        let probe = FakeProbe {
+            responses: BTreeMap::from([
+                (SelectedProtocol::Rest, ProbeResult::NetworkFailure),
+                (SelectedProtocol::ApiSsl, ProbeResult::NetworkFailure),
+                (SelectedProtocol::Api, ProbeResult::NetworkFailure),
+            ]),
+        };
+
+        let error = route_protocol(RequestedProtocol::Auto, true, None, &probe)
+            .expect_err("all failed probes should return network error");
+
+        assert_eq!(error.error_code, ErrorCode::NetworkError);
     }
 }

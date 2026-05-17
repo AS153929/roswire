@@ -6,6 +6,7 @@ use crate::protocol::classic::{
     ClassicApiSession,
 };
 use serde::Serialize;
+use serde_json::Value;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -170,11 +171,9 @@ fn remote_doctor(cli: &Cli) -> RemoteDoctor {
     };
 
     match target.requested_protocol.as_str() {
+        "auto" => return remote_doctor_auto(&target),
         "rest" => {
-            return remote_error(
-                "unknown",
-                &RosWireError::unsupported_action("REST remote doctor is not implemented yet"),
-            );
+            return remote_doctor_rest(&target, target.port);
         }
         "api-ssl" => {
             let stream =
@@ -192,6 +191,80 @@ fn remote_doctor(cli: &Cli) -> RemoteDoctor {
         Err(error) => return remote_error("api", &error),
     };
     probe_classic_remote(stream, &target.user, &target.password, "api")
+}
+
+fn remote_doctor_auto(target: &crate::ExecutionTarget) -> RemoteDoctor {
+    match probe_rest_resource(target, crate::default_port("rest")) {
+        Ok(remote) => return remote,
+        Err(error) if error.error_code == ErrorCode::AuthFailed => {
+            return remote_error("rest", &error)
+        }
+        Err(_) => {}
+    }
+
+    match TlsApiStream::connect(
+        &target.host,
+        crate::default_port("api-ssl"),
+        Duration::from_secs(10),
+    ) {
+        Ok(stream) => {
+            return probe_classic_remote(stream, &target.user, &target.password, "api-ssl")
+        }
+        Err(error) if error.error_code == ErrorCode::AuthFailed => {
+            return remote_error("api-ssl", &error);
+        }
+        Err(_) => {}
+    }
+
+    let stream = match TcpApiStream::connect(
+        &target.host,
+        crate::default_port("api"),
+        Duration::from_secs(10),
+    ) {
+        Ok(stream) => stream,
+        Err(error) => return remote_error("api", &error),
+    };
+    probe_classic_remote(stream, &target.user, &target.password, "api")
+}
+
+fn remote_doctor_rest(target: &crate::ExecutionTarget, port: u16) -> RemoteDoctor {
+    match probe_rest_resource(target, port) {
+        Ok(remote) => remote,
+        Err(error) => remote_error("rest", &error),
+    }
+}
+
+fn probe_rest_resource(
+    target: &crate::ExecutionTarget,
+    port: u16,
+) -> Result<RemoteDoctor, Box<RosWireError>> {
+    let client = crate::protocol::rest::RestClient::https(
+        &target.host,
+        port,
+        &target.user,
+        &target.password,
+    );
+    client
+        .system_resource()
+        .map(|value| remote_doctor_from_rest_resource("rest", &value))
+}
+
+fn remote_doctor_from_rest_resource(selected_protocol: &str, value: &Value) -> RemoteDoctor {
+    RemoteDoctor {
+        status: "ok".to_owned(),
+        selected_protocol: selected_protocol.to_owned(),
+        routeros_version: string_field(value, "version"),
+        architecture: string_field(value, "architecture-name")
+            .or_else(|| string_field(value, "architecture")),
+        board_name: string_field(value, "board-name"),
+        error_code: None,
+        message: None,
+        warnings: Vec::new(),
+    }
+}
+
+fn string_field(value: &Value, name: &str) -> Option<String> {
+    value.get(name).and_then(Value::as_str).map(str::to_owned)
 }
 
 fn probe_classic_remote<S: crate::protocol::classic::transport::ApiStream>(
@@ -265,10 +338,8 @@ fn local_dependencies() -> BTreeMap<String, String> {
         ("classic_api_login".to_owned(), "available".to_owned()),
         ("api_ssl_tls".to_owned(), "available".to_owned()),
         ("rest_client".to_owned(), "available".to_owned()),
-        (
-            "rest_remote_doctor".to_owned(),
-            "not_implemented".to_owned(),
-        ),
+        ("rest_remote_doctor".to_owned(), "available".to_owned()),
+        ("protocol_auto_probe".to_owned(), "available".to_owned()),
         ("plain_secret_backend".to_owned(), "available".to_owned()),
         ("env_secret_backend".to_owned(), "available".to_owned()),
         (
@@ -309,11 +380,16 @@ fn render_json<T: Serialize>(value: &T) -> RosWireResult<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{error_code_name, local_dependencies, local_routeros_version_hint, remote_error};
+    use super::{
+        error_code_name, local_dependencies, local_doctor, local_routeros_version_hint,
+        remote_error, string_field,
+    };
     use crate::args::{Cli, RouterOsVersionMode};
+    use crate::config::ConfigPaths;
     use crate::error::{ErrorCode, RosWireError};
     use clap::Parser;
     use std::collections::BTreeMap;
+    use std::fs;
 
     #[test]
     fn local_dependencies_are_stable() {
@@ -331,6 +407,14 @@ mod tests {
             Some("available"),
         );
         assert_eq!(
+            dependencies.get("protocol_auto_probe").map(String::as_str),
+            Some("available"),
+        );
+        assert_eq!(
+            dependencies.get("rest_remote_doctor").map(String::as_str),
+            Some("available"),
+        );
+        assert_eq!(
             dependencies
                 .get("encrypted_secret_backend")
                 .map(String::as_str),
@@ -344,6 +428,116 @@ mod tests {
             dependencies.get("ssh_transfer_runtime").map(String::as_str),
             Some("not_implemented"),
         );
+    }
+
+    #[test]
+    fn rest_remote_doctor_parses_resource_payload() {
+        let payload = serde_json::json!({
+            "version": "7.15.3",
+            "architecture-name": "arm64",
+            "board-name": "RB5009",
+        });
+
+        let remote = super::remote_doctor_from_rest_resource("rest", &payload);
+
+        assert_eq!(remote.status, "ok");
+        assert_eq!(remote.selected_protocol, "rest");
+        assert_eq!(remote.routeros_version.as_deref(), Some("7.15.3"));
+        assert_eq!(remote.architecture.as_deref(), Some("arm64"));
+        assert_eq!(remote.board_name.as_deref(), Some("RB5009"));
+    }
+
+    #[test]
+    fn string_field_reads_strings_only() {
+        let payload = serde_json::json!({
+            "version": "7.15.3",
+            "uptime": 123,
+        });
+
+        assert_eq!(string_field(&payload, "version").as_deref(), Some("7.15.3"));
+        assert_eq!(string_field(&payload, "uptime"), None);
+        assert_eq!(string_field(&payload, "missing"), None);
+    }
+
+    #[test]
+    fn local_doctor_reads_existing_config_profile_and_secret_status() {
+        let temp = tempfile::tempdir().expect("temp dir should be created");
+        write_config(
+            temp.path(),
+            r#"
+version = 1
+default_profile = "studio"
+
+[profiles.studio]
+host = "198.51.100.10"
+user = "admin"
+allow_plain_secrets = true
+
+[profiles.studio.secrets.password]
+type = "plain"
+value = "test-value"
+"#,
+        );
+        let cli = Cli::try_parse_from(["roswire", "doctor", "--json"]).expect("cli should parse");
+        let env = BTreeMap::from([("ROSWIRE_HOME".to_owned(), temp.path().display().to_string())]);
+        let paths = ConfigPaths::from_home(temp.path().to_path_buf());
+
+        let (local, config_file) = local_doctor(&cli, &env, &paths).expect("doctor should work");
+
+        assert!(config_file.is_some());
+        assert!(local.home_exists);
+        assert!(local.config_exists);
+        assert!(local.permissions_ok);
+        assert_eq!(local.active_profile.as_deref(), Some("studio"));
+        assert_eq!(local.profiles, vec!["studio".to_owned()]);
+        assert_eq!(
+            local
+                .secret_status
+                .get("password")
+                .map(|secret| secret.secret_type.as_str()),
+            Some("plain"),
+        );
+        assert!(local.warnings.is_empty());
+    }
+
+    #[test]
+    fn local_doctor_records_profile_and_secret_warnings_without_failing() {
+        let temp = tempfile::tempdir().expect("temp dir should be created");
+        write_config(
+            temp.path(),
+            r#"
+version = 1
+default_profile = "studio"
+
+[profiles.studio]
+host = "198.51.100.10"
+user = "admin"
+
+[profiles.studio.secrets.password]
+type = "plain"
+value = "test-value"
+"#,
+        );
+        let cli = Cli::try_parse_from(["roswire", "--profile", "missing", "doctor", "--json"])
+            .expect("cli should parse");
+        let env = BTreeMap::from([("ROSWIRE_HOME".to_owned(), temp.path().display().to_string())]);
+        let paths = ConfigPaths::from_home(temp.path().to_path_buf());
+
+        let (local, config_file) = local_doctor(&cli, &env, &paths).expect("doctor should degrade");
+
+        assert!(config_file.is_some());
+        assert_eq!(local.active_profile, None);
+        assert!(local
+            .warnings
+            .iter()
+            .any(|warning| warning == "PROFILE_NOT_FOUND"));
+
+        let cli = Cli::try_parse_from(["roswire", "doctor", "--json"]).expect("cli should parse");
+        let (local, _) = local_doctor(&cli, &env, &paths).expect("doctor should collect warnings");
+        assert!(local
+            .warnings
+            .iter()
+            .any(|warning| warning == "CONFIG_ERROR"));
     }
 
     #[test]
@@ -370,5 +564,17 @@ mod tests {
     #[test]
     fn error_code_names_are_stable() {
         assert_eq!(error_code_name(ErrorCode::ConfigError), "CONFIG_ERROR");
+    }
+
+    fn write_config(home: &std::path::Path, contents: &str) {
+        fs::write(home.join("config.toml"), contents).expect("config should be written");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(home, fs::Permissions::from_mode(0o700))
+                .expect("home permissions should be set");
+            fs::set_permissions(home.join("config.toml"), fs::Permissions::from_mode(0o600))
+                .expect("config permissions should be set");
+        }
     }
 }

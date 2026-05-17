@@ -10,12 +10,14 @@ pub mod workflow;
 use args::Cli;
 use clap::Parser;
 use error::{ErrorContext, RosWireResult};
-use mapping::ActionKind;
+use mapping::{ActionKind, ProtocolRequest};
 use protocol::classic::{
-    transport::{TcpApiStream, TlsApiStream},
+    transport::{ApiStream, TcpApiStream, TlsApiStream},
     ClassicApiSession,
 };
 use protocol::rest::RestClient;
+use protocol::{ProbeResult, ProtocolProbe, RequestedProtocol, RouterOsMajor, SelectedProtocol};
+use serde_json::Value;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -61,50 +63,106 @@ pub fn run() -> RosWireResult<()> {
     }
 
     let target = resolve_execution_target(&cli)?;
-    if target.requested_protocol == "rest" {
-        let context = execution_context(&invocation, &target, "rest");
-        let client = RestClient::https(&target.host, target.port, &target.user, &target.password);
-        let value = with_context(client.execute_request(&request), context)?;
-        let payload = serde_json::to_string(&value).map_err(|error| {
-            Box::new(error::RosWireError::internal(format!(
-                "failed to serialize RouterOS REST response: {error}",
-            )))
-        })?;
-        println!("{payload}");
-        return Ok(());
-    }
-    if target.requested_protocol == "api-ssl" {
-        let context = execution_context(&invocation, &target, "api-ssl");
-        let stream = with_context(
-            TlsApiStream::connect(&target.host, target.port, Duration::from_secs(10)),
-            context.clone(),
-        )?;
-        let mut session = ClassicApiSession::new(stream);
-        with_context(
-            session.login(&target.user, &target.password),
-            context.clone(),
-        )?;
-        let rows = with_context(session.execute_request(&request), context)?;
-        let payload = serde_json::to_string(&rows).map_err(|error| {
-            Box::new(error::RosWireError::internal(format!(
-                "failed to serialize RouterOS response: {error}",
-            )))
-        })?;
-        println!("{payload}");
-        return Ok(());
+    if target.requested_protocol == "auto" {
+        return execute_auto(&invocation, &request, &target);
     }
 
-    let context = execution_context(&invocation, &target, "api");
+    if target.requested_protocol == "rest" {
+        return execute_rest(&invocation, &request, &target, target.port, "rest");
+    }
+
+    if target.requested_protocol == "api-ssl" {
+        return execute_api_ssl(&invocation, &request, &target, target.port);
+    }
+
+    execute_api(&invocation, &request, &target, target.port)
+}
+
+fn execute_auto(
+    invocation: &args::ParsedInvocation,
+    request: &ProtocolRequest,
+    target: &ExecutionTarget,
+) -> RosWireResult<()> {
+    let probe = LiveProtocolProbe { request, target };
+    let decision = with_context(
+        protocol::route_protocol(
+            RequestedProtocol::Auto,
+            request.mapping.has_rest_mapping(),
+            None,
+            &probe,
+        ),
+        execution_context(invocation, target, "unknown"),
+    )?;
+
+    match decision.selected_protocol {
+        SelectedProtocol::Rest => {
+            execute_rest(invocation, request, target, default_port("rest"), "rest")
+        }
+        SelectedProtocol::ApiSsl => {
+            execute_api_ssl(invocation, request, target, default_port("api-ssl"))
+        }
+        SelectedProtocol::Api => execute_api(invocation, request, target, default_port("api")),
+    }
+}
+
+fn execute_rest(
+    invocation: &args::ParsedInvocation,
+    request: &ProtocolRequest,
+    target: &ExecutionTarget,
+    port: u16,
+    selected_protocol: &str,
+) -> RosWireResult<()> {
+    let context = execution_context(invocation, target, selected_protocol);
+    let client = RestClient::https(&target.host, port, &target.user, &target.password);
+    let value = with_context(client.execute_request(request), context)?;
+    let payload = serde_json::to_string(&value).map_err(|error| {
+        Box::new(error::RosWireError::internal(format!(
+            "failed to serialize RouterOS REST response: {error}",
+        )))
+    })?;
+    println!("{payload}");
+
+    Ok(())
+}
+
+fn execute_api_ssl(
+    invocation: &args::ParsedInvocation,
+    request: &ProtocolRequest,
+    target: &ExecutionTarget,
+    port: u16,
+) -> RosWireResult<()> {
+    let context = execution_context(invocation, target, "api-ssl");
     let stream = with_context(
-        TcpApiStream::connect(&target.host, target.port, Duration::from_secs(10)),
+        TlsApiStream::connect(&target.host, port, Duration::from_secs(10)),
         context.clone(),
     )?;
+    execute_classic_stream(stream, request, &target.user, &target.password, context)
+}
+
+fn execute_api(
+    invocation: &args::ParsedInvocation,
+    request: &ProtocolRequest,
+    target: &ExecutionTarget,
+    port: u16,
+) -> RosWireResult<()> {
+    let context = execution_context(invocation, target, "api");
+    let stream = with_context(
+        TcpApiStream::connect(&target.host, port, Duration::from_secs(10)),
+        context.clone(),
+    )?;
+    execute_classic_stream(stream, request, &target.user, &target.password, context)
+}
+
+fn execute_classic_stream<S: ApiStream>(
+    stream: S,
+    request: &ProtocolRequest,
+    user: &str,
+    password: &str,
+    context: ErrorContext,
+) -> RosWireResult<()> {
     let mut session = ClassicApiSession::new(stream);
-    with_context(
-        session.login(&target.user, &target.password),
-        context.clone(),
-    )?;
-    let rows = with_context(session.execute_request(&request), context)?;
+    with_context(session.login(user, password), context.clone())?;
+    let rows = with_context(session.execute_request(request), context)?;
     let payload = serde_json::to_string(&rows).map_err(|error| {
         Box::new(error::RosWireError::internal(format!(
             "failed to serialize RouterOS response: {error}",
@@ -113,6 +171,100 @@ pub fn run() -> RosWireResult<()> {
     println!("{payload}");
 
     Ok(())
+}
+
+struct LiveProtocolProbe<'a> {
+    request: &'a ProtocolRequest,
+    target: &'a ExecutionTarget,
+}
+
+impl ProtocolProbe for LiveProtocolProbe<'_> {
+    fn probe(&self, protocol: SelectedProtocol) -> ProbeResult {
+        match protocol {
+            SelectedProtocol::Rest => self.probe_rest(),
+            SelectedProtocol::ApiSsl => self.probe_api_ssl(),
+            SelectedProtocol::Api => self.probe_api(),
+        }
+    }
+}
+
+impl LiveProtocolProbe<'_> {
+    fn probe_rest(&self) -> ProbeResult {
+        let client = RestClient::https(
+            &self.target.host,
+            default_port("rest"),
+            &self.target.user,
+            &self.target.password,
+        );
+        match client.system_resource() {
+            Ok(value) => ProbeResult::Success {
+                routeros_major: routeros_major_from_rest_resource(&value),
+                rest_supported_for_action: self.request.mapping.has_rest_mapping(),
+            },
+            Err(error) => classify_probe_error(&error),
+        }
+    }
+
+    fn probe_api_ssl(&self) -> ProbeResult {
+        match TlsApiStream::connect(
+            &self.target.host,
+            default_port("api-ssl"),
+            Duration::from_secs(10),
+        ) {
+            Ok(stream) => self.probe_classic(stream),
+            Err(error) => classify_probe_error(&error),
+        }
+    }
+
+    fn probe_api(&self) -> ProbeResult {
+        match TcpApiStream::connect(
+            &self.target.host,
+            default_port("api"),
+            Duration::from_secs(10),
+        ) {
+            Ok(stream) => self.probe_classic(stream),
+            Err(error) => classify_probe_error(&error),
+        }
+    }
+
+    fn probe_classic<S: ApiStream>(&self, stream: S) -> ProbeResult {
+        let mut session = ClassicApiSession::new(stream);
+        if let Err(error) = session.login(&self.target.user, &self.target.password) {
+            return classify_probe_error(&error);
+        }
+        match session.probe_resource() {
+            Ok(resource) => ProbeResult::Success {
+                routeros_major: resource.routeros_major(),
+                rest_supported_for_action: false,
+            },
+            Err(error) => classify_probe_error(&error),
+        }
+    }
+}
+
+fn classify_probe_error(error: &error::RosWireError) -> ProbeResult {
+    match error.error_code {
+        error::ErrorCode::AuthFailed => ProbeResult::AuthFailed,
+        _ => ProbeResult::NetworkFailure,
+    }
+}
+
+fn routeros_major_from_rest_resource(value: &Value) -> RouterOsMajor {
+    value
+        .get("version")
+        .and_then(Value::as_str)
+        .map(routeros_major_from_version)
+        .unwrap_or(RouterOsMajor::Unknown)
+}
+
+fn routeros_major_from_version(version: &str) -> RouterOsMajor {
+    if version.starts_with("7.") {
+        RouterOsMajor::V7
+    } else if version.starts_with("6.") {
+        RouterOsMajor::V6
+    } else {
+        RouterOsMajor::Unknown
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -354,12 +506,14 @@ fn unsupported_command_name(invocation: &args::ParsedInvocation) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        default_port, execution_context, parse_port, resolve_execution_target_with_env,
-        unsupported_command_name, validate_protocol, validate_routeros_version, with_context,
-        ExecutionTarget,
+        classify_probe_error, default_port, execution_context, parse_port,
+        resolve_execution_target_with_env, routeros_major_from_rest_resource,
+        routeros_major_from_version, unsupported_command_name, validate_protocol,
+        validate_routeros_version, with_context, ExecutionTarget,
     };
     use crate::args::{Cli, ParsedInvocation};
     use crate::error::{ErrorCode, RosWireError};
+    use crate::protocol::{ProbeResult, RouterOsMajor};
     use clap::Parser;
     use std::collections::BTreeMap;
     use std::fs;
@@ -597,6 +751,41 @@ value = "v1:nonce:ciphertext"
         assert_eq!(default_port("api"), 8728);
         assert_eq!(default_port("api-ssl"), 8729);
         assert_eq!(default_port("rest"), 443);
+    }
+
+    #[test]
+    fn rest_resource_version_helpers_detect_routeros_major() {
+        assert_eq!(routeros_major_from_version("7.15.3"), RouterOsMajor::V7);
+        assert_eq!(routeros_major_from_version("6.49.10"), RouterOsMajor::V6);
+        assert_eq!(
+            routeros_major_from_version("unknown"),
+            RouterOsMajor::Unknown
+        );
+
+        assert_eq!(
+            routeros_major_from_rest_resource(&serde_json::json!({"version":"7.16"})),
+            RouterOsMajor::V7,
+        );
+        assert_eq!(
+            routeros_major_from_rest_resource(&serde_json::json!({"board-name":"RB5009"})),
+            RouterOsMajor::Unknown,
+        );
+    }
+
+    #[test]
+    fn probe_error_classifier_preserves_auth_failures_only() {
+        assert_eq!(
+            classify_probe_error(&RosWireError::auth_failed("bad login")),
+            ProbeResult::AuthFailed,
+        );
+        assert_eq!(
+            classify_probe_error(&RosWireError::network("timeout")),
+            ProbeResult::NetworkFailure,
+        );
+        assert_eq!(
+            classify_probe_error(&RosWireError::ros_api_failure("trap")),
+            ProbeResult::NetworkFailure,
+        );
     }
 
     #[test]
