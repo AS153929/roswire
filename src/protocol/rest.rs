@@ -294,6 +294,35 @@ mod tests {
     }
 
     #[test]
+    fn rest_firewall_address_list_print_reads_json_array() {
+        let server = TestServer::responding_with(
+            200,
+            "application/json",
+            r#"[{".id":"*1","list":"trusted","address":"192.0.2.10"}]"#,
+        );
+        let credential = test_credential();
+        let client = RestClient::with_base_url(server.base_url(), "admin", &credential);
+        let request = build_protocol_request(&ParsedInvocation {
+            path: vec![
+                "ip".to_owned(),
+                "firewall".to_owned(),
+                "address-list".to_owned(),
+            ],
+            action: "print".to_owned(),
+            resolved_args: BTreeMap::new(),
+        })
+        .expect("request should map");
+
+        let value = client
+            .execute_request(&request)
+            .expect("REST firewall address-list print should work");
+        let http_request = server.request();
+
+        assert_eq!(value[0]["list"], "trusted");
+        assert!(http_request.contains("GET /rest/ip/firewall/address-list HTTP/1.1"));
+    }
+
+    #[test]
     fn rest_wireguard_print_reads_json_array() {
         let server = TestServer::responding_with(
             200,

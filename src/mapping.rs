@@ -209,6 +209,30 @@ pub fn resolve_mapping(invocation: &ParsedInvocation) -> RosWireResult<CommandMa
                 path: "/rest/ip/address/{.id}".to_owned(),
             }),
         )),
+        (["ip", "firewall", "address-list"], "print") => Ok(print_mapping(
+            &["ip", "firewall", "address-list"],
+            "/ip/firewall/address-list/print",
+            Some(RestMapping {
+                method: RestMethod::Get,
+                path: "/rest/ip/firewall/address-list".to_owned(),
+            }),
+        )),
+        (["ip", "firewall", "filter"], "print") => Ok(print_mapping(
+            &["ip", "firewall", "filter"],
+            "/ip/firewall/filter/print",
+            Some(RestMapping {
+                method: RestMethod::Get,
+                path: "/rest/ip/firewall/filter".to_owned(),
+            }),
+        )),
+        (["ip", "firewall", "nat"], "print") => Ok(print_mapping(
+            &["ip", "firewall", "nat"],
+            "/ip/firewall/nat/print",
+            Some(RestMapping {
+                method: RestMethod::Get,
+                path: "/rest/ip/firewall/nat".to_owned(),
+            }),
+        )),
         (["ip", "route"], "print") => Ok(print_mapping(
             &["ip", "route"],
             "/ip/route/print",
@@ -426,6 +450,42 @@ mod tests {
                 .map(|rest| (&rest.method, rest.path.as_str())),
             Some((&RestMethod::Get, "/rest/ip/route")),
         );
+    }
+
+    #[test]
+    fn maps_firewall_prints_as_read_only_with_rest_support() {
+        for (path, classic_path, rest_path) in [
+            (
+                &["ip", "firewall", "address-list"][..],
+                "/ip/firewall/address-list/print",
+                "/rest/ip/firewall/address-list",
+            ),
+            (
+                &["ip", "firewall", "filter"][..],
+                "/ip/firewall/filter/print",
+                "/rest/ip/firewall/filter",
+            ),
+            (
+                &["ip", "firewall", "nat"][..],
+                "/ip/firewall/nat/print",
+                "/rest/ip/firewall/nat",
+            ),
+        ] {
+            let mapping = resolve_mapping(&invocation(path, "print", &[]))
+                .expect("firewall print should resolve");
+
+            assert_eq!(mapping.action_kind, ActionKind::Print);
+            assert_eq!(mapping.routeros_path, classic_path);
+            assert_eq!(mapping.idempotency, "read-only");
+            assert!(mapping.side_effects.is_empty());
+            assert_eq!(
+                mapping
+                    .rest_mapping
+                    .as_ref()
+                    .map(|rest| (&rest.method, rest.path.as_str())),
+                Some((&RestMethod::Get, rest_path)),
+            );
+        }
     }
 
     #[test]

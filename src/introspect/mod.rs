@@ -372,6 +372,48 @@ fn catalog() -> Vec<CommandDefinition> {
             ],
         },
         CommandDefinition {
+            name: "ip firewall address-list print".to_owned(),
+            summary: "Print firewall address-list entries.".to_owned(),
+            kind: "routeros-command".to_owned(),
+            syntax: "roswire ip firewall address-list print --json".to_owned(),
+            arguments: vec![],
+            examples: vec!["roswire ip firewall address-list print --json".to_owned()],
+            errors: vec![
+                "USAGE_ERROR".to_owned(),
+                "AUTH_FAILED".to_owned(),
+                "NETWORK_ERROR".to_owned(),
+                "ROS_API_FAILURE".to_owned(),
+            ],
+        },
+        CommandDefinition {
+            name: "ip firewall filter print".to_owned(),
+            summary: "Print firewall filter rules without changing packet handling.".to_owned(),
+            kind: "routeros-command".to_owned(),
+            syntax: "roswire ip firewall filter print --json".to_owned(),
+            arguments: vec![],
+            examples: vec!["roswire ip firewall filter print --json".to_owned()],
+            errors: vec![
+                "USAGE_ERROR".to_owned(),
+                "AUTH_FAILED".to_owned(),
+                "NETWORK_ERROR".to_owned(),
+                "ROS_API_FAILURE".to_owned(),
+            ],
+        },
+        CommandDefinition {
+            name: "ip firewall nat print".to_owned(),
+            summary: "Print firewall NAT rules without changing packet handling.".to_owned(),
+            kind: "routeros-command".to_owned(),
+            syntax: "roswire ip firewall nat print --json".to_owned(),
+            arguments: vec![],
+            examples: vec!["roswire ip firewall nat print --json".to_owned()],
+            errors: vec![
+                "USAGE_ERROR".to_owned(),
+                "AUTH_FAILED".to_owned(),
+                "NETWORK_ERROR".to_owned(),
+                "ROS_API_FAILURE".to_owned(),
+            ],
+        },
+        CommandDefinition {
             name: "ip route print".to_owned(),
             summary: "Print RouterOS IP routes, including v6/v7 route table fields when present."
                 .to_owned(),

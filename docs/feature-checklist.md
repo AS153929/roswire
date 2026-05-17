@@ -105,7 +105,7 @@
 - [x] `key=value` 参数解析
 - [x] 写操作返回稳定 `roswire.write.v1` payload
 - [x] 不支持的命令/action 返回 `UNSUPPORTED_ACTION`
-- [ ] `/ip/firewall` 命令族
+- [x] `/ip/firewall` 命令族（address-list/filter/nat print，#70）
 - [x] `/ip/route` 命令族（print，#71）
 - [x] `/interface/wireguard` 命令族（interface/peers print，#72）
 - [x] `/system/package` 命令族（print，#73）
@@ -340,7 +340,7 @@
 - #67 `M7: 实现 SCP fallback 与加密 SSH 私钥 passphrase 支持`
 - #68 `M7: 实现 system script put 工作流`
 - #69 `M7: 实现 RouterOS raw command passthrough`
-- #70 `M7: 扩展 /ip/firewall 命令族`
+- #70 `M7: 扩展 /ip/firewall 命令族`（完成：address-list/filter/nat print）
 - #71 `M7: 扩展 /ip/route 命令族`（完成：print）
 - #72 `M7: 扩展 /interface/wireguard 命令族`（完成：interface/peers print）
 - #73 `M7: 扩展 /system/package 命令族`（完成：print）

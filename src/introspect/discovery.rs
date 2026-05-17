@@ -219,6 +219,36 @@ fn static_output_fields(command: &str) -> Vec<String> {
             "interface".to_owned(),
             "disabled".to_owned(),
         ],
+        "ip firewall address-list print" => vec![
+            ".id".to_owned(),
+            "list".to_owned(),
+            "address".to_owned(),
+            "timeout".to_owned(),
+            "dynamic".to_owned(),
+            "disabled".to_owned(),
+            "comment".to_owned(),
+        ],
+        "ip firewall filter print" => vec![
+            ".id".to_owned(),
+            "chain".to_owned(),
+            "action".to_owned(),
+            "src-address".to_owned(),
+            "dst-address".to_owned(),
+            "protocol".to_owned(),
+            "disabled".to_owned(),
+            "comment".to_owned(),
+        ],
+        "ip firewall nat print" => vec![
+            ".id".to_owned(),
+            "chain".to_owned(),
+            "action".to_owned(),
+            "src-address".to_owned(),
+            "dst-address".to_owned(),
+            "to-addresses".to_owned(),
+            "to-ports".to_owned(),
+            "disabled".to_owned(),
+            "comment".to_owned(),
+        ],
         "ip route print" => vec![
             ".id".to_owned(),
             "dst-address".to_owned(),
@@ -447,6 +477,48 @@ mod tests {
                 "disabled"
             ]
         );
+    }
+
+    #[test]
+    fn degraded_snapshot_includes_firewall_static_fields() {
+        let fp = unknown_fingerprint("198.51.100.10", "unknown");
+        let policies = vec![
+            StaticCommandPolicy {
+                name: "ip firewall address-list print".to_owned(),
+                side_effects: Vec::new(),
+                idempotency: "read-only".to_owned(),
+            },
+            StaticCommandPolicy {
+                name: "ip firewall filter print".to_owned(),
+                side_effects: Vec::new(),
+                idempotency: "read-only".to_owned(),
+            },
+            StaticCommandPolicy {
+                name: "ip firewall nat print".to_owned(),
+                side_effects: Vec::new(),
+                idempotency: "read-only".to_owned(),
+            },
+        ];
+
+        let snapshot = degraded_remote_schema_snapshot(
+            "studio",
+            &fp,
+            policies,
+            warning_name(ErrorCode::ConfigError),
+        );
+
+        assert_eq!(snapshot.commands[0].name, "ip firewall address-list print");
+        assert!(snapshot.commands[0]
+            .output_fields_observed
+            .contains(&"list".to_owned()));
+        assert_eq!(snapshot.commands[1].name, "ip firewall filter print");
+        assert!(snapshot.commands[1]
+            .output_fields_observed
+            .contains(&"chain".to_owned()));
+        assert_eq!(snapshot.commands[2].name, "ip firewall nat print");
+        assert!(snapshot.commands[2]
+            .output_fields_observed
+            .contains(&"to-addresses".to_owned()));
     }
 
     #[test]

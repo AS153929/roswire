@@ -11,6 +11,9 @@ fn commands_json_contains_catalog_entries() {
             "\"schema_version\":\"roswire.commands.v1\"",
         ))
         .stdout(predicate::str::contains("ip address add"))
+        .stdout(predicate::str::contains("ip firewall address-list print"))
+        .stdout(predicate::str::contains("ip firewall filter print"))
+        .stdout(predicate::str::contains("ip firewall nat print"))
         .stdout(predicate::str::contains("ip route print"))
         .stdout(predicate::str::contains("interface wireguard print"))
         .stdout(predicate::str::contains("interface wireguard peers print"))
@@ -85,6 +88,21 @@ fn help_ip_route_print_returns_command_details() {
         ))
         .stdout(predicate::str::contains("\"name\":\"ip route print\""))
         .stdout(predicate::str::contains("v6/v7 route table fields"));
+}
+
+#[test]
+fn help_firewall_print_returns_command_details() {
+    let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
+    cmd.args(["help", "ip", "firewall", "filter", "print", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"schema_version\":\"roswire.command.help.v1\"",
+        ))
+        .stdout(predicate::str::contains(
+            "\"name\":\"ip firewall filter print\"",
+        ))
+        .stdout(predicate::str::contains("without changing packet handling"));
 }
 
 #[test]
@@ -249,6 +267,23 @@ fn schema_ip_route_print_is_registered() {
         ))
         .stdout(predicate::str::contains("\"command\":\"ip route print\""))
         .stdout(predicate::str::contains("\"arguments\":[]"));
+}
+
+#[test]
+fn schema_firewall_prints_are_registered() {
+    for topic in [
+        ["ip", "firewall", "address-list", "print"],
+        ["ip", "firewall", "filter", "print"],
+        ["ip", "firewall", "nat", "print"],
+    ] {
+        let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
+        cmd.args(["schema", "command"])
+            .args(topic)
+            .arg("--json")
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("\"arguments\":[]"));
+    }
 }
 
 #[test]
@@ -421,6 +456,24 @@ fn schema_command_remote_ip_route_has_static_fields() {
     .stdout(predicate::str::contains("\"dst-address\""))
     .stdout(predicate::str::contains("\"routing-table\""))
     .stdout(predicate::str::contains("\"support\":\"unknown\""));
+}
+
+#[test]
+fn schema_command_remote_firewall_has_static_fields() {
+    let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
+    let temp = tempfile::tempdir().expect("temp dir should be created");
+    cmd.env("ROSWIRE_HOME", temp.path().join("missing-home"));
+    cmd.args([
+        "schema", "command", "ip", "firewall", "nat", "print", "--remote", "--json",
+    ])
+    .assert()
+    .success()
+    .stderr(predicate::str::is_empty())
+    .stdout(predicate::str::contains(
+        "\"name\":\"ip firewall nat print\"",
+    ))
+    .stdout(predicate::str::contains("\"chain\""))
+    .stdout(predicate::str::contains("\"to-addresses\""));
 }
 
 #[test]

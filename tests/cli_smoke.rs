@@ -137,6 +137,23 @@ fn ip_route_print_is_registered_before_connection_resolution() {
 }
 
 #[test]
+fn firewall_print_is_registered_before_connection_resolution() {
+    let temp = tempfile::tempdir().expect("temp dir should be created");
+    let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
+    cmd.env("ROSWIRE_HOME", temp.path())
+        .env_remove("ROS_PROFILE")
+        .env_remove("ROS_HOST")
+        .env_remove("ROS_USER")
+        .env_remove("ROS_PASSWORD")
+        .args(["ip", "firewall", "nat", "print", "--json"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("\"error_code\":\"CONFIG_ERROR\""))
+        .stderr(predicate::str::contains("UNSUPPORTED_ACTION").not());
+}
+
+#[test]
 fn wireguard_prints_are_registered_before_connection_resolution() {
     let temp = tempfile::tempdir().expect("temp dir should be created");
     let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
