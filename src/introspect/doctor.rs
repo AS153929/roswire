@@ -1,7 +1,10 @@
 use crate::args::Cli;
 use crate::config::{self, ConfigFile, ConfigInspectPaths, ConfigPaths, SecretInspectField};
 use crate::error::{ErrorCode, RosWireError, RosWireResult};
-use crate::protocol::classic::{transport::TcpApiStream, ClassicApiSession};
+use crate::protocol::classic::{
+    transport::{TcpApiStream, TlsApiStream},
+    ClassicApiSession,
+};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -174,10 +177,12 @@ fn remote_doctor(cli: &Cli) -> RemoteDoctor {
             );
         }
         "api-ssl" => {
-            return remote_error(
-                "api-ssl",
-                &RosWireError::network("api-ssl TLS transport is not implemented yet"),
-            );
+            let stream =
+                match TlsApiStream::connect(&target.host, target.port, Duration::from_secs(10)) {
+                    Ok(stream) => stream,
+                    Err(error) => return remote_error("api-ssl", &error),
+                };
+            return probe_classic_remote(stream, &target.user, &target.password, "api-ssl");
         }
         _ => {}
     }
@@ -186,14 +191,23 @@ fn remote_doctor(cli: &Cli) -> RemoteDoctor {
         Ok(stream) => stream,
         Err(error) => return remote_error("api", &error),
     };
+    probe_classic_remote(stream, &target.user, &target.password, "api")
+}
+
+fn probe_classic_remote<S: crate::protocol::classic::transport::ApiStream>(
+    stream: S,
+    user: &str,
+    password: &str,
+    selected_protocol: &str,
+) -> RemoteDoctor {
     let mut session = ClassicApiSession::new(stream);
-    if let Err(error) = session.login(&target.user, &target.password) {
-        return remote_error("api", &error);
+    if let Err(error) = session.login(user, password) {
+        return remote_error(selected_protocol, &error);
     }
     match session.probe_resource() {
         Ok(resource) => RemoteDoctor {
             status: "ok".to_owned(),
-            selected_protocol: "api".to_owned(),
+            selected_protocol: selected_protocol.to_owned(),
             routeros_version: Some(resource.version),
             architecture: Some(resource.architecture),
             board_name: Some(resource.board_name),
@@ -201,7 +215,7 @@ fn remote_doctor(cli: &Cli) -> RemoteDoctor {
             message: None,
             warnings: Vec::new(),
         },
-        Err(error) => remote_error("api", &error),
+        Err(error) => remote_error(selected_protocol, &error),
     }
 }
 
@@ -249,7 +263,7 @@ fn local_dependencies() -> BTreeMap<String, String> {
             "available".to_owned(),
         ),
         ("classic_api_login".to_owned(), "available".to_owned()),
-        ("api_ssl_tls".to_owned(), "not_implemented".to_owned()),
+        ("api_ssl_tls".to_owned(), "available".to_owned()),
         ("rest_client".to_owned(), "available".to_owned()),
         (
             "rest_remote_doctor".to_owned(),
@@ -324,7 +338,7 @@ mod tests {
         );
         assert_eq!(
             dependencies.get("api_ssl_tls").map(String::as_str),
-            Some("not_implemented"),
+            Some("available"),
         );
         assert_eq!(
             dependencies.get("ssh_transfer_runtime").map(String::as_str),

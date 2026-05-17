@@ -11,7 +11,10 @@ use args::Cli;
 use clap::Parser;
 use error::{ErrorContext, RosWireResult};
 use mapping::ActionKind;
-use protocol::classic::{transport::TcpApiStream, ClassicApiSession};
+use protocol::classic::{
+    transport::{TcpApiStream, TlsApiStream},
+    ClassicApiSession,
+};
 use protocol::rest::RestClient;
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -71,10 +74,24 @@ pub fn run() -> RosWireResult<()> {
         return Ok(());
     }
     if target.requested_protocol == "api-ssl" {
-        return Err(Box::new(
-            error::RosWireError::network("api-ssl TLS transport is not implemented yet")
-                .with_context(execution_context(&invocation, &target, "api-ssl")),
-        ));
+        let context = execution_context(&invocation, &target, "api-ssl");
+        let stream = with_context(
+            TlsApiStream::connect(&target.host, target.port, Duration::from_secs(10)),
+            context.clone(),
+        )?;
+        let mut session = ClassicApiSession::new(stream);
+        with_context(
+            session.login(&target.user, &target.password),
+            context.clone(),
+        )?;
+        let rows = with_context(session.execute_request(&request), context)?;
+        let payload = serde_json::to_string(&rows).map_err(|error| {
+            Box::new(error::RosWireError::internal(format!(
+                "failed to serialize RouterOS response: {error}",
+            )))
+        })?;
+        println!("{payload}");
+        return Ok(());
     }
 
     let context = execution_context(&invocation, &target, "api");
