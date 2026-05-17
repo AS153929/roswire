@@ -67,6 +67,67 @@ fn registered_write_command_reaches_connection_resolution() {
 }
 
 #[test]
+fn script_put_dry_run_outputs_plan_without_source_content_or_absolute_path() {
+    let temp = tempfile::tempdir().expect("temp dir should be created");
+    let source = temp.path().join("bootstrap.rsc");
+    let script = ":put \"SMOKE_SECRET_SCRIPT\"";
+    fs::write(&source, script).expect("source should be written");
+    let source_arg = format!("@{}", source.display());
+    let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
+
+    cmd.args([
+        "script",
+        "put",
+        "bootstrap",
+        "--source",
+        &source_arg,
+        "--dry-run",
+        "--json",
+    ])
+    .assert()
+    .success()
+    .stderr(predicate::str::is_empty())
+    .stdout(predicate::str::contains(
+        "\"schema_version\":\"roswire.workflow.script.put.plan.v1\"",
+    ))
+    .stdout(predicate::str::contains("\"script_name\":\"bootstrap\""))
+    .stdout(predicate::str::contains("***REDACTED***/bootstrap.rsc"))
+    .stdout(predicate::str::contains(temp.path().to_string_lossy().as_ref()).not())
+    .stdout(predicate::str::contains(script).not());
+}
+
+#[test]
+fn script_put_reaches_connection_resolution_without_leaking_source() {
+    let temp = tempfile::tempdir().expect("temp dir should be created");
+    let source = temp.path().join("bootstrap.rsc");
+    let script = ":put \"SMOKE_SECRET_SCRIPT\"";
+    fs::write(&source, script).expect("source should be written");
+    let source_arg = format!("@{}", source.display());
+    let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
+
+    cmd.env("ROSWIRE_HOME", temp.path().join("missing-home"))
+        .env_remove("ROS_PROFILE")
+        .env_remove("ROS_HOST")
+        .env_remove("ROS_USER")
+        .env_remove("ROS_PASSWORD")
+        .args([
+            "script",
+            "put",
+            "bootstrap",
+            "--source",
+            &source_arg,
+            "--json",
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("\"error_code\":\"CONFIG_ERROR\""))
+        .stderr(predicate::str::contains("UNSUPPORTED_ACTION").not())
+        .stderr(predicate::str::contains(temp.path().to_string_lossy().as_ref()).not())
+        .stderr(predicate::str::contains(script).not());
+}
+
+#[test]
 fn readonly_print_without_connection_config_returns_config_error() {
     let temp = tempfile::tempdir().expect("temp dir should be created");
     let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");

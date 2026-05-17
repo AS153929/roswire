@@ -427,6 +427,32 @@ mod tests {
     }
 
     #[test]
+    fn rest_system_script_add_sends_put_body() {
+        let server = TestServer::responding_with(204, "application/json", "");
+        let credential = test_credential();
+        let client = RestClient::with_base_url(server.base_url(), "admin", &credential);
+        let request = build_protocol_request(&ParsedInvocation {
+            path: vec!["system".to_owned(), "script".to_owned()],
+            action: "add".to_owned(),
+            resolved_args: BTreeMap::from([
+                ("name".to_owned(), "bootstrap".to_owned()),
+                ("source".to_owned(), ":put hello".to_owned()),
+            ]),
+        })
+        .expect("request should map");
+
+        let value = client
+            .execute_request(&request)
+            .expect("REST script add should work");
+        let http_request = server.request();
+
+        assert_eq!(value, serde_json::json!({ "status": "ok" }));
+        assert!(http_request.contains("PUT /rest/system/script HTTP/1.1"));
+        assert!(http_request.contains(r#""name":"bootstrap""#));
+        assert!(http_request.contains(r#""source":":put hello""#));
+    }
+
+    #[test]
     fn rest_user_print_reads_json_array() {
         let server = TestServer::responding_with(
             200,

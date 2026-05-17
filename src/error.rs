@@ -335,6 +335,10 @@ pub fn redact_value(value: &str) -> String {
 
 pub fn is_sensitive_key(key: &str) -> bool {
     let lowercase = key.to_ascii_lowercase();
+    if lowercase == "source" {
+        return true;
+    }
+
     [
         "password",
         "token",
@@ -426,7 +430,9 @@ mod tests {
         assert!(is_sensitive_key("SSH_KEY_PATH"));
         assert!(is_sensitive_key("privateKey"));
         assert!(is_sensitive_key("preshared-key"));
+        assert!(is_sensitive_key("source"));
         assert!(!is_sensitive_key("interface"));
+        assert!(!is_sensitive_key("src-address"));
     }
 
     #[test]

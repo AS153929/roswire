@@ -61,6 +61,18 @@ fn run_with_cli(cli: &Cli) -> RosWireResult<()> {
         return Ok(());
     }
 
+    if let Some(result) = workflow::handle(&cli.tokens, cli) {
+        match result? {
+            workflow::WorkflowResult::Payload(payload) => {
+                println!("{payload}");
+                return Ok(());
+            }
+            workflow::WorkflowResult::Invocation(invocation) => {
+                return execute_invocation(invocation, cli);
+            }
+        }
+    }
+
     if let Some(result) = transfer::handle(&cli.tokens, cli) {
         let payload = result?;
         println!("{payload}");
@@ -68,6 +80,10 @@ fn run_with_cli(cli: &Cli) -> RosWireResult<()> {
     }
 
     let invocation = args::parse_invocation(&cli.tokens)?;
+    execute_invocation(invocation, cli)
+}
+
+fn execute_invocation(invocation: args::ParsedInvocation, cli: &Cli) -> RosWireResult<()> {
     let request = mapping::build_protocol_request(&invocation)?;
 
     let target = resolve_execution_target(cli)?;
@@ -175,13 +191,13 @@ fn execute_classic_stream<S: ApiStream>(
 }
 
 #[derive(Debug, Serialize)]
-struct WriteSuccessPayload<'a, T: Serialize> {
+struct WriteSuccessPayload<'a> {
     schema_version: &'static str,
     status: &'static str,
     command: String,
     action: &'static str,
     selected_protocol: &'a str,
-    response: &'a T,
+    response: Value,
 }
 
 fn render_protocol_payload<T: Serialize>(
@@ -200,10 +216,40 @@ fn render_protocol_payload<T: Serialize>(
             command: request_command_name(request),
             action: request.mapping.action_kind.as_str(),
             selected_protocol,
-            response,
+            response: sanitized_response_value(response)?,
         },
         "RouterOS write response",
     )
+}
+
+fn sanitized_response_value<T: Serialize>(response: &T) -> RosWireResult<Value> {
+    let mut value = serde_json::to_value(response).map_err(|error| {
+        Box::new(error::RosWireError::internal(format!(
+            "failed to serialize RouterOS write response: {error}",
+        )))
+    })?;
+    redact_sensitive_json_fields(&mut value);
+    Ok(value)
+}
+
+fn redact_sensitive_json_fields(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            for (key, value) in map {
+                if error::is_sensitive_key(key) {
+                    *value = Value::String(error::redact_value(value.as_str().unwrap_or("value")));
+                } else {
+                    redact_sensitive_json_fields(value);
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                redact_sensitive_json_fields(item);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn serialize_payload<T: Serialize>(value: &T, label: &str) -> RosWireResult<String> {
@@ -537,8 +583,8 @@ mod tests {
     use super::{
         classify_probe_error, default_port, execution_context, parse_port, render_protocol_payload,
         resolve_execution_target_with_env, routeros_major_from_rest_resource,
-        routeros_major_from_version, unsupported_command_name, validate_protocol,
-        validate_routeros_version, with_context, ExecutionTarget,
+        routeros_major_from_version, sanitized_response_value, unsupported_command_name,
+        validate_protocol, validate_routeros_version, with_context, ExecutionTarget,
     };
     use crate::args::{Cli, ParsedInvocation};
     use crate::error::{ErrorCode, RosWireError};
@@ -838,6 +884,34 @@ value = "v1:nonce:ciphertext"
         assert!(payload.contains("\"command\":\"ip/address/add\""));
         assert!(payload.contains("\"selected_protocol\":\"api-ssl\""));
         assert!(payload.contains("\"response\":[]"));
+    }
+
+    #[test]
+    fn write_payload_redacts_sensitive_response_fields() {
+        let request = build_protocol_request(&ParsedInvocation {
+            path: vec!["system".to_owned(), "script".to_owned()],
+            action: "add".to_owned(),
+            resolved_args: BTreeMap::from([
+                ("name".to_owned(), "bootstrap".to_owned()),
+                ("source".to_owned(), ":put secret".to_owned()),
+            ]),
+        })
+        .expect("script write request should map");
+        let response = serde_json::json!({
+            "name": "bootstrap",
+            "source": ":put secret",
+            "nested": { "password": "super-secret" }
+        });
+
+        let payload =
+            render_protocol_payload(&request, "rest", &response).expect("payload should serialize");
+        let sanitized = sanitized_response_value(&response).expect("response should sanitize");
+
+        assert_eq!(sanitized["source"], "***REDACTED***");
+        assert_eq!(sanitized["nested"]["password"], "***REDACTED***");
+        assert!(payload.contains("\"schema_version\":\"roswire.write.v1\""));
+        assert!(!payload.contains(":put secret"));
+        assert!(!payload.contains("super-secret"));
     }
 
     #[test]

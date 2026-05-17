@@ -125,6 +125,7 @@ fn help_payload(tokens: &[String]) -> RosWireResult<String> {
                 "--json".to_owned(),
                 "--debug".to_owned(),
                 "--include-remote".to_owned(),
+                "--source".to_owned(),
             ],
             commands: commands_payload().commands,
         };
@@ -481,6 +482,42 @@ fn catalog() -> Vec<CommandDefinition> {
             examples: vec!["roswire system package print --json".to_owned()],
             errors: vec![
                 "USAGE_ERROR".to_owned(),
+                "AUTH_FAILED".to_owned(),
+                "NETWORK_ERROR".to_owned(),
+                "ROS_API_FAILURE".to_owned(),
+            ],
+        },
+        CommandDefinition {
+            name: "script put".to_owned(),
+            summary: "Read local .rsc text and store it as a RouterOS system script without creating a RouterOS file.".to_owned(),
+            kind: "workflow".to_owned(),
+            syntax: "roswire script put <name> --source @<local.rsc> --json".to_owned(),
+            arguments: vec![
+                ArgumentSpec {
+                    name: "name".to_owned(),
+                    style: "positional".to_owned(),
+                    required: true,
+                    arg_type: "string".to_owned(),
+                    description: "RouterOS system script name to create.".to_owned(),
+                    example: Some("bootstrap".to_owned()),
+                },
+                ArgumentSpec {
+                    name: "--source".to_owned(),
+                    style: "option".to_owned(),
+                    required: true,
+                    arg_type: "@path".to_owned(),
+                    description: "Local UTF-8 .rsc file to read as script source. The content is never printed in errors or dry-run output.".to_owned(),
+                    example: Some("@setup.rsc".to_owned()),
+                },
+            ],
+            examples: vec![
+                "roswire script put bootstrap --source @setup.rsc --dry-run --json".to_owned(),
+                "roswire --profile lab script put bootstrap --source @setup.rsc --json".to_owned(),
+            ],
+            errors: vec![
+                "USAGE_ERROR".to_owned(),
+                "FILE_TOO_LARGE".to_owned(),
+                "CONFIG_ERROR".to_owned(),
                 "AUTH_FAILED".to_owned(),
                 "NETWORK_ERROR".to_owned(),
                 "ROS_API_FAILURE".to_owned(),

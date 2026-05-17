@@ -158,6 +158,10 @@ pub struct Cli {
     #[arg(long)]
     pub name: Option<String>,
 
+    /// Local text source for script workflows. Use @<path>.
+    #[arg(long)]
+    pub source: Option<String>,
+
     /// Request compact RouterOS export output.
     #[arg(long)]
     pub compact: bool,
@@ -344,5 +348,23 @@ mod tests {
             cli.tokens,
             vec!["file", "upload", "setup.rsc", "flash/setup.rsc"]
         );
+    }
+
+    #[test]
+    fn supports_script_source_flag_after_tokens() {
+        let cli = Cli::try_parse_from([
+            "roswire",
+            "script",
+            "put",
+            "bootstrap",
+            "--source",
+            "@setup.rsc",
+            "--dry-run",
+        ])
+        .expect("script source flag should parse");
+
+        assert_eq!(cli.source.as_deref(), Some("@setup.rsc"));
+        assert!(cli.dry_run);
+        assert_eq!(cli.tokens, vec!["script", "put", "bootstrap"]);
     }
 }

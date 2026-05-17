@@ -18,6 +18,7 @@ fn commands_json_contains_catalog_entries() {
         .stdout(predicate::str::contains("interface wireguard print"))
         .stdout(predicate::str::contains("interface wireguard peers print"))
         .stdout(predicate::str::contains("system package print"))
+        .stdout(predicate::str::contains("script put"))
         .stdout(predicate::str::contains("tool mac-server print"))
         .stdout(predicate::str::contains("tool netwatch print"))
         .stdout(predicate::str::contains("user print"))
@@ -64,6 +65,20 @@ fn help_system_package_returns_command_details() {
         .stdout(predicate::str::contains(
             "Print installed RouterOS packages.",
         ));
+}
+
+#[test]
+fn help_script_put_returns_command_details() {
+    let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
+    cmd.args(["help", "script", "put", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"schema_version\":\"roswire.command.help.v1\"",
+        ))
+        .stdout(predicate::str::contains("\"name\":\"script put\""))
+        .stdout(predicate::str::contains("--source"))
+        .stdout(predicate::str::contains("without creating a RouterOS file"));
 }
 
 #[test]
@@ -256,6 +271,19 @@ fn schema_system_package_print_is_registered() {
             "\"command\":\"system package print\"",
         ))
         .stdout(predicate::str::contains("\"arguments\":[]"));
+}
+
+#[test]
+fn schema_script_put_is_registered() {
+    let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
+    cmd.args(["schema", "command", "script", "put", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"schema_version\":\"roswire.command.schema.v1\"",
+        ))
+        .stdout(predicate::str::contains("\"command\":\"script put\""))
+        .stdout(predicate::str::contains("\"name\":\"--source\""));
 }
 
 #[test]

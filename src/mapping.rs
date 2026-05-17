@@ -117,6 +117,9 @@ fn validate_required_args(
         {
             &[".id"][..]
         }
+        ([system, script], ActionKind::Add) if system == "system" && script == "script" => {
+            &["name", "source"][..]
+        }
         _ => &[][..],
     };
 
@@ -255,6 +258,17 @@ pub fn resolve_mapping(invocation: &ParsedInvocation) -> RosWireResult<CommandMa
             Some(RestMapping {
                 method: RestMethod::Get,
                 path: "/rest/system/package".to_owned(),
+            }),
+        )),
+        (["system", "script"], "add") => Ok(write_mapping(
+            &["system", "script"],
+            ActionKind::Add,
+            "/system/script/add",
+            "creates-routeros-script",
+            "not-idempotent",
+            Some(RestMapping {
+                method: RestMethod::Put,
+                path: "/rest/system/script".to_owned(),
             }),
         )),
         (["tool", "mac-server"], "print") => Ok(print_mapping(
@@ -562,6 +576,57 @@ mod tests {
                 .as_ref()
                 .map(|rest| (&rest.method, rest.path.as_str())),
             Some((&RestMethod::Get, "/rest/system/package")),
+        );
+    }
+
+    #[test]
+    fn maps_system_script_add_as_write_with_required_source() {
+        let request = build_protocol_request(&invocation(
+            &["system", "script"],
+            "add",
+            &[("name", "bootstrap"), ("source", ":put hello")],
+        ))
+        .expect("system script add should map");
+
+        assert_eq!(request.mapping.action_kind, ActionKind::Add);
+        assert_eq!(request.mapping.routeros_path, "/system/script/add");
+        assert_eq!(
+            request.mapping.side_effects,
+            vec!["creates-routeros-script"]
+        );
+        assert_eq!(request.mapping.idempotency, "not-idempotent");
+        assert_eq!(
+            request
+                .mapping
+                .rest_mapping
+                .as_ref()
+                .map(|rest| (&rest.method, rest.path.as_str())),
+            Some((&RestMethod::Put, "/rest/system/script")),
+        );
+        assert_eq!(
+            request.classic_api_words(),
+            vec![
+                "/system/script/add".to_owned(),
+                "=name=bootstrap".to_owned(),
+                "=source=:put hello".to_owned(),
+            ],
+        );
+
+        let error = build_protocol_request(&invocation(
+            &["system", "script"],
+            "add",
+            &[("source", ":put secret")],
+        ))
+        .expect_err("script add should require name and redact source");
+        assert_eq!(error.error_code, ErrorCode::UsageError);
+        assert_eq!(error.context.command, "system/script/add");
+        assert_eq!(
+            error
+                .context
+                .resolved_args
+                .get("source")
+                .map(String::as_str),
+            Some("***REDACTED***"),
         );
     }
 
