@@ -1528,6 +1528,8 @@ dependencies = [
  "md-5",
  "predicates",
  "rand",
+ "rustls",
+ "rustls-pki-types",
  "serde",
  "serde_json",
  "sha2",
@@ -1535,6 +1537,7 @@ dependencies = [
  "thiserror 1.0.69",
  "toml",
  "ureq",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]

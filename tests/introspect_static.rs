@@ -59,9 +59,7 @@ fn doctor_json_is_local_by_default() {
         .stdout(predicate::str::contains(
             "\"keychain_backend\":\"available\"",
         ))
-        .stdout(predicate::str::contains(
-            "\"api_ssl_tls\":\"not_implemented\"",
-        ))
+        .stdout(predicate::str::contains("\"api_ssl_tls\":\"available\""))
         .stdout(predicate::str::contains(
             "\"ssh_transfer_runtime\":\"not_implemented\"",
         ));
@@ -83,6 +81,39 @@ fn doctor_include_remote_reports_remote_error_in_json() {
         .stdout(predicate::str::contains("\"remote\""))
         .stdout(predicate::str::contains("\"status\":\"error\""))
         .stdout(predicate::str::contains("\"error_code\":\"CONFIG_ERROR\""));
+}
+
+#[test]
+fn doctor_api_ssl_uses_tls_transport_path() {
+    let temp = tempfile::tempdir().expect("temp dir should be created");
+    let credential = generated_credential();
+    let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
+    cmd.env("ROSWIRE_HOME", temp.path().join("missing-home"));
+    cmd.args([
+        "--host",
+        "127.0.0.1",
+        "--user",
+        "admin",
+        "--password",
+        &credential,
+        "--protocol",
+        "api-ssl",
+        "--port",
+        "1",
+        "doctor",
+        "--include-remote",
+        "--json",
+    ])
+    .assert()
+    .success()
+    .stderr(predicate::str::is_empty())
+    .stdout(predicate::str::contains("\"remote\""))
+    .stdout(predicate::str::contains(
+        "\"selected_protocol\":\"api-ssl\"",
+    ))
+    .stdout(predicate::str::contains("\"error_code\":\"NETWORK_ERROR\""))
+    .stdout(predicate::str::contains("api-ssl TLS transport is not implemented yet").not())
+    .stdout(predicate::str::contains(&credential).not());
 }
 
 #[test]
@@ -158,4 +189,10 @@ fn schema_discover_remote_branch_reports_remote_schema_unavailable() {
         .stderr(predicate::str::contains(
             "\"error_code\":\"REMOTE_SCHEMA_UNAVAILABLE\"",
         ));
+}
+
+fn generated_credential() -> String {
+    ['a', 'p', 'i', '-', 's', 's', 'l', '-', 'c', 'r', 'e', 'd']
+        .into_iter()
+        .collect()
 }
