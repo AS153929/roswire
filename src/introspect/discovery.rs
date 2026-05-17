@@ -194,6 +194,24 @@ fn static_output_fields(command: &str) -> Vec<String> {
             "last-logged-in".to_owned(),
         ],
         "interface print" => vec![".id".to_owned(), "name".to_owned(), "disabled".to_owned()],
+        "interface wireguard print" => vec![
+            ".id".to_owned(),
+            "name".to_owned(),
+            "listen-port".to_owned(),
+            "mtu".to_owned(),
+            "running".to_owned(),
+            "disabled".to_owned(),
+        ],
+        "interface wireguard peers print" => vec![
+            ".id".to_owned(),
+            "interface".to_owned(),
+            "public-key".to_owned(),
+            "endpoint-address".to_owned(),
+            "endpoint-port".to_owned(),
+            "allowed-address".to_owned(),
+            "disabled".to_owned(),
+            "comment".to_owned(),
+        ],
         "ip address print" => vec![
             ".id".to_owned(),
             "address".to_owned(),
@@ -429,5 +447,52 @@ mod tests {
                 "disabled"
             ]
         );
+    }
+
+    #[test]
+    fn degraded_snapshot_includes_wireguard_static_fields_without_private_material() {
+        let fp = unknown_fingerprint("198.51.100.10", "unknown");
+        let policies = vec![
+            StaticCommandPolicy {
+                name: "interface wireguard print".to_owned(),
+                side_effects: Vec::new(),
+                idempotency: "read-only".to_owned(),
+            },
+            StaticCommandPolicy {
+                name: "interface wireguard peers print".to_owned(),
+                side_effects: Vec::new(),
+                idempotency: "read-only".to_owned(),
+            },
+        ];
+
+        let snapshot = degraded_remote_schema_snapshot(
+            "studio",
+            &fp,
+            policies,
+            warning_name(ErrorCode::ConfigError),
+        );
+
+        assert_eq!(snapshot.commands[0].name, "interface wireguard print");
+        assert!(snapshot.commands[0]
+            .output_fields_observed
+            .iter()
+            .all(|field| !field.contains("private")));
+        assert_eq!(
+            snapshot.commands[1].output_fields_observed,
+            vec![
+                ".id",
+                "interface",
+                "public-key",
+                "endpoint-address",
+                "endpoint-port",
+                "allowed-address",
+                "disabled",
+                "comment"
+            ]
+        );
+        assert!(snapshot.commands[1]
+            .output_fields_observed
+            .iter()
+            .all(|field| !field.contains("preshared")));
     }
 }

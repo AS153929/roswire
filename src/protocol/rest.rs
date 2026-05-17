@@ -294,6 +294,60 @@ mod tests {
     }
 
     #[test]
+    fn rest_wireguard_print_reads_json_array() {
+        let server = TestServer::responding_with(
+            200,
+            "application/json",
+            r#"[{".id":"*1","name":"wg0","listen-port":"13231"}]"#,
+        );
+        let credential = test_credential();
+        let client = RestClient::with_base_url(server.base_url(), "admin", &credential);
+        let request = build_protocol_request(&ParsedInvocation {
+            path: vec!["interface".to_owned(), "wireguard".to_owned()],
+            action: "print".to_owned(),
+            resolved_args: BTreeMap::new(),
+        })
+        .expect("request should map");
+
+        let value = client
+            .execute_request(&request)
+            .expect("REST wireguard print should work");
+        let http_request = server.request();
+
+        assert_eq!(value[0]["name"], "wg0");
+        assert!(http_request.contains("GET /rest/interface/wireguard HTTP/1.1"));
+    }
+
+    #[test]
+    fn rest_wireguard_peers_print_reads_json_array() {
+        let server = TestServer::responding_with(
+            200,
+            "application/json",
+            r#"[{".id":"*1","interface":"wg0","public-key":"pub"}]"#,
+        );
+        let credential = test_credential();
+        let client = RestClient::with_base_url(server.base_url(), "admin", &credential);
+        let request = build_protocol_request(&ParsedInvocation {
+            path: vec![
+                "interface".to_owned(),
+                "wireguard".to_owned(),
+                "peers".to_owned(),
+            ],
+            action: "print".to_owned(),
+            resolved_args: BTreeMap::new(),
+        })
+        .expect("request should map");
+
+        let value = client
+            .execute_request(&request)
+            .expect("REST wireguard peers print should work");
+        let http_request = server.request();
+
+        assert_eq!(value[0]["interface"], "wg0");
+        assert!(http_request.contains("GET /rest/interface/wireguard/peers HTTP/1.1"));
+    }
+
+    #[test]
     fn rest_system_package_print_reads_json_array() {
         let server = TestServer::responding_with(
             200,

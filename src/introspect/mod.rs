@@ -401,6 +401,36 @@ fn catalog() -> Vec<CommandDefinition> {
             ],
         },
         CommandDefinition {
+            name: "interface wireguard print".to_owned(),
+            summary: "Print RouterOS v7 WireGuard interfaces without exposing private keys."
+                .to_owned(),
+            kind: "routeros-command".to_owned(),
+            syntax: "roswire interface wireguard print --json".to_owned(),
+            arguments: vec![],
+            examples: vec!["roswire interface wireguard print --json".to_owned()],
+            errors: vec![
+                "USAGE_ERROR".to_owned(),
+                "AUTH_FAILED".to_owned(),
+                "NETWORK_ERROR".to_owned(),
+                "ROS_API_FAILURE".to_owned(),
+            ],
+        },
+        CommandDefinition {
+            name: "interface wireguard peers print".to_owned(),
+            summary: "Print RouterOS v7 WireGuard peers without exposing preshared keys."
+                .to_owned(),
+            kind: "routeros-command".to_owned(),
+            syntax: "roswire interface wireguard peers print --json".to_owned(),
+            arguments: vec![],
+            examples: vec!["roswire interface wireguard peers print --json".to_owned()],
+            errors: vec![
+                "USAGE_ERROR".to_owned(),
+                "AUTH_FAILED".to_owned(),
+                "NETWORK_ERROR".to_owned(),
+                "ROS_API_FAILURE".to_owned(),
+            ],
+        },
+        CommandDefinition {
             name: "system package print".to_owned(),
             summary: "Print installed RouterOS packages.".to_owned(),
             kind: "routeros-command".to_owned(),

@@ -152,6 +152,22 @@ pub fn resolve_mapping(invocation: &ParsedInvocation) -> RosWireResult<CommandMa
                 path: "/rest/interface".to_owned(),
             }),
         )),
+        (["interface", "wireguard"], "print") => Ok(print_mapping(
+            &["interface", "wireguard"],
+            "/interface/wireguard/print",
+            Some(RestMapping {
+                method: RestMethod::Get,
+                path: "/rest/interface/wireguard".to_owned(),
+            }),
+        )),
+        (["interface", "wireguard", "peers"], "print") => Ok(print_mapping(
+            &["interface", "wireguard", "peers"],
+            "/interface/wireguard/peers/print",
+            Some(RestMapping {
+                method: RestMethod::Get,
+                path: "/rest/interface/wireguard/peers".to_owned(),
+            }),
+        )),
         (["ip", "address"], "print") => Ok(print_mapping(
             &["ip", "address"],
             "/ip/address/print",
@@ -409,6 +425,38 @@ mod tests {
                 .as_ref()
                 .map(|rest| (&rest.method, rest.path.as_str())),
             Some((&RestMethod::Get, "/rest/ip/route")),
+        );
+    }
+
+    #[test]
+    fn maps_wireguard_prints_as_read_only_with_rest_support() {
+        let wg = resolve_mapping(&invocation(&["interface", "wireguard"], "print", &[]))
+            .expect("wireguard print should resolve");
+        assert_eq!(wg.action_kind, ActionKind::Print);
+        assert_eq!(wg.routeros_path, "/interface/wireguard/print");
+        assert_eq!(wg.idempotency, "read-only");
+        assert!(wg.side_effects.is_empty());
+        assert_eq!(
+            wg.rest_mapping
+                .as_ref()
+                .map(|rest| (&rest.method, rest.path.as_str())),
+            Some((&RestMethod::Get, "/rest/interface/wireguard")),
+        );
+
+        let peers = resolve_mapping(&invocation(
+            &["interface", "wireguard", "peers"],
+            "print",
+            &[],
+        ))
+        .expect("wireguard peers print should resolve");
+        assert_eq!(peers.routeros_path, "/interface/wireguard/peers/print");
+        assert_eq!(peers.idempotency, "read-only");
+        assert_eq!(
+            peers
+                .rest_mapping
+                .as_ref()
+                .map(|rest| (&rest.method, rest.path.as_str())),
+            Some((&RestMethod::Get, "/rest/interface/wireguard/peers")),
         );
     }
 

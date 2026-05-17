@@ -12,6 +12,8 @@ fn commands_json_contains_catalog_entries() {
         ))
         .stdout(predicate::str::contains("ip address add"))
         .stdout(predicate::str::contains("ip route print"))
+        .stdout(predicate::str::contains("interface wireguard print"))
+        .stdout(predicate::str::contains("interface wireguard peers print"))
         .stdout(predicate::str::contains("system package print"))
         .stdout(predicate::str::contains("user print"))
         .stdout(predicate::str::contains("doctor"));
@@ -83,6 +85,31 @@ fn help_ip_route_print_returns_command_details() {
         ))
         .stdout(predicate::str::contains("\"name\":\"ip route print\""))
         .stdout(predicate::str::contains("v6/v7 route table fields"));
+}
+
+#[test]
+fn help_wireguard_print_returns_command_details() {
+    let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
+    cmd.args(["help", "interface", "wireguard", "print", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"schema_version\":\"roswire.command.help.v1\"",
+        ))
+        .stdout(predicate::str::contains(
+            "\"name\":\"interface wireguard print\"",
+        ))
+        .stdout(predicate::str::contains("without exposing private keys"));
+
+    let mut peers = Command::cargo_bin("roswire").expect("binary should compile");
+    peers
+        .args(["help", "interface", "wireguard", "peers", "print", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"name\":\"interface wireguard peers print\"",
+        ))
+        .stdout(predicate::str::contains("without exposing preshared keys"));
 }
 
 #[test]
@@ -225,6 +252,43 @@ fn schema_ip_route_print_is_registered() {
 }
 
 #[test]
+fn schema_wireguard_prints_are_registered() {
+    let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
+    cmd.args([
+        "schema",
+        "command",
+        "interface",
+        "wireguard",
+        "print",
+        "--json",
+    ])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains(
+        "\"command\":\"interface wireguard print\"",
+    ))
+    .stdout(predicate::str::contains("\"arguments\":[]"));
+
+    let mut peers = Command::cargo_bin("roswire").expect("binary should compile");
+    peers
+        .args([
+            "schema",
+            "command",
+            "interface",
+            "wireguard",
+            "peers",
+            "print",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"command\":\"interface wireguard peers print\"",
+        ))
+        .stdout(predicate::str::contains("\"arguments\":[]"));
+}
+
+#[test]
 fn unknown_help_topic_returns_structured_error() {
     let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
     cmd.args(["help", "unknown", "topic", "--json"])
@@ -357,6 +421,32 @@ fn schema_command_remote_ip_route_has_static_fields() {
     .stdout(predicate::str::contains("\"dst-address\""))
     .stdout(predicate::str::contains("\"routing-table\""))
     .stdout(predicate::str::contains("\"support\":\"unknown\""));
+}
+
+#[test]
+fn schema_command_remote_wireguard_has_static_fields_without_private_material() {
+    let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
+    let temp = tempfile::tempdir().expect("temp dir should be created");
+    cmd.env("ROSWIRE_HOME", temp.path().join("missing-home"));
+    cmd.args([
+        "schema",
+        "command",
+        "interface",
+        "wireguard",
+        "peers",
+        "print",
+        "--remote",
+        "--json",
+    ])
+    .assert()
+    .success()
+    .stderr(predicate::str::is_empty())
+    .stdout(predicate::str::contains(
+        "\"name\":\"interface wireguard peers print\"",
+    ))
+    .stdout(predicate::str::contains("\"public-key\""))
+    .stdout(predicate::str::contains("\"preshared-key\"").not())
+    .stdout(predicate::str::contains("\"private-key\"").not());
 }
 
 fn generated_credential() -> String {

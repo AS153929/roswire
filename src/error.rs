@@ -340,6 +340,7 @@ pub fn is_sensitive_key(key: &str) -> bool {
         "token",
         "secret",
         "private",
+        "preshared",
         "ssh-key",
         "ssh_key",
         "ssh_password",
@@ -424,6 +425,7 @@ mod tests {
         assert!(is_sensitive_key("Password"));
         assert!(is_sensitive_key("SSH_KEY_PATH"));
         assert!(is_sensitive_key("privateKey"));
+        assert!(is_sensitive_key("preshared-key"));
         assert!(!is_sensitive_key("interface"));
     }
 
