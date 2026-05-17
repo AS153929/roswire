@@ -294,6 +294,31 @@ mod tests {
     }
 
     #[test]
+    fn rest_user_print_reads_json_array() {
+        let server = TestServer::responding_with(
+            200,
+            "application/json",
+            r#"[{".id":"*1","name":"admin","group":"full","disabled":"false"}]"#,
+        );
+        let credential = test_credential();
+        let client = RestClient::with_base_url(server.base_url(), "admin", &credential);
+        let request = build_protocol_request(&ParsedInvocation {
+            path: vec!["user".to_owned()],
+            action: "print".to_owned(),
+            resolved_args: BTreeMap::new(),
+        })
+        .expect("request should map");
+
+        let value = client
+            .execute_request(&request)
+            .expect("REST user print should work");
+        let http_request = server.request();
+
+        assert_eq!(value[0]["name"], "admin");
+        assert!(http_request.contains("GET /rest/user HTTP/1.1"));
+    }
+
+    #[test]
     fn rest_patch_expands_id_and_sends_json_body() {
         let server = TestServer::responding_with(200, "application/json", r#"{}"#);
         let credential = test_credential();

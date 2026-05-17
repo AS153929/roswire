@@ -209,6 +209,14 @@ pub fn resolve_mapping(invocation: &ParsedInvocation) -> RosWireResult<CommandMa
                 path: "/rest/system/package".to_owned(),
             }),
         )),
+        (["user"], "print") => Ok(print_mapping(
+            &["user"],
+            "/user/print",
+            Some(RestMapping {
+                method: RestMethod::Get,
+                path: "/rest/user".to_owned(),
+            }),
+        )),
         _ => Err(Box::new(
             RosWireError::unsupported_action(format!(
                 "unsupported RouterOS action: {}",
@@ -404,6 +412,23 @@ mod tests {
                 .as_ref()
                 .map(|rest| (&rest.method, rest.path.as_str())),
             Some((&RestMethod::Get, "/rest/system/package")),
+        );
+    }
+
+    #[test]
+    fn maps_user_print_as_read_only_with_rest_support() {
+        let user = resolve_mapping(&invocation(&["user"], "print", &[]))
+            .expect("user print should resolve");
+
+        assert_eq!(user.action_kind, ActionKind::Print);
+        assert_eq!(user.routeros_path, "/user/print");
+        assert!(user.side_effects.is_empty());
+        assert_eq!(user.idempotency, "read-only");
+        assert_eq!(
+            user.rest_mapping
+                .as_ref()
+                .map(|rest| (&rest.method, rest.path.as_str())),
+            Some((&RestMethod::Get, "/rest/user")),
         );
     }
 
