@@ -1,4 +1,4 @@
-use crate::args::Cli;
+use crate::args::{Cli, TransferIfExists};
 use crate::config;
 use crate::error::{self, ErrorContext, RosWireError, RosWireResult};
 use crate::protocol::classic::{
@@ -23,8 +23,81 @@ const PLAN_SCHEMA_VERSION: &str = "roswire.transfer.plan.v1";
 const DEFAULT_TRANSFER_BACKEND: &str = "ssh";
 const RESULT_SCHEMA_VERSION: &str = "roswire.transfer.result.v1";
 const MAX_TRANSFER_BYTES: u64 = 64 * 1024 * 1024;
-const WORKFLOW_FILE_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_CONNECT_TIMEOUT_SECONDS: u64 = 10;
+const DEFAULT_WAIT_TIMEOUT_SECONDS: u64 = 30;
+const DEFAULT_TRANSFER_TIMEOUT_SECONDS: u64 = 30;
+const DEFAULT_CLEANUP_TIMEOUT_SECONDS: u64 = 10;
+const MAX_TRANSFER_RETRIES: u8 = 5;
 const WORKFLOW_FILE_WAIT_INTERVAL: Duration = Duration::from_secs(1);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TransferPolicy {
+    if_exists: TransferIfExists,
+    timeouts: TransferTimeouts,
+    retry: TransferRetryPolicy,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TransferTimeouts {
+    connect_seconds: u64,
+    wait_remote_file_seconds: u64,
+    transfer_seconds: u64,
+    cleanup_seconds: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TransferRetryPolicy {
+    max_retries: u8,
+    delay_seconds: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TransferRetryPlan {
+    max_retries: u8,
+    delay_seconds: u64,
+    retryable_error_codes: Vec<&'static str>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TransferPolicyPlan {
+    if_exists: String,
+    timeouts: TransferTimeouts,
+    retry: TransferRetryPlan,
+}
+
+impl TransferPolicy {
+    fn plan(&self) -> TransferPolicyPlan {
+        TransferPolicyPlan {
+            if_exists: self.if_exists.as_str().to_owned(),
+            timeouts: self.timeouts.clone(),
+            retry: TransferRetryPlan {
+                max_retries: self.retry.max_retries,
+                delay_seconds: self.retry.delay_seconds,
+                retryable_error_codes: vec![
+                    "NETWORK_ERROR",
+                    "FILE_TRANSFER_FAILED",
+                    "ROS_API_FAILURE",
+                ],
+            },
+        }
+    }
+
+    fn connect_timeout(&self) -> Duration {
+        Duration::from_secs(self.timeouts.connect_seconds)
+    }
+
+    fn transfer_timeout(&self) -> Duration {
+        Duration::from_secs(self.timeouts.transfer_seconds)
+    }
+
+    fn wait_timeout(&self) -> Duration {
+        Duration::from_secs(self.timeouts.wait_remote_file_seconds)
+    }
+
+    fn retry_delay(&self) -> Duration {
+        Duration::from_secs(self.retry.delay_seconds)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TransferCommand {
@@ -82,6 +155,7 @@ pub struct TransferPlan {
     pub dry_run: bool,
     pub transfer_backend: String,
     pub preconditions: TransferPreconditions,
+    pub policy: TransferPolicyPlan,
     pub paths: TransferPaths,
     pub cleanup: TransferCleanup,
     pub steps: Vec<TransferStep>,
@@ -265,11 +339,16 @@ trait WorkflowBackend {
 struct LiveWorkflowBackend {
     ssh: SshRuntimeConfig,
     control: ControlRuntimeConfig,
+    policy: TransferPolicy,
 }
 
 impl LiveWorkflowBackend {
-    fn new(ssh: SshRuntimeConfig, control: ControlRuntimeConfig) -> Self {
-        Self { ssh, control }
+    fn new(ssh: SshRuntimeConfig, control: ControlRuntimeConfig, policy: TransferPolicy) -> Self {
+        Self {
+            ssh,
+            control,
+            policy,
+        }
     }
 }
 
@@ -294,7 +373,7 @@ impl WorkflowBackend for LiveWorkflowBackend {
         remote: &str,
         context: &ErrorContext,
     ) -> RosWireResult<(u64, String)> {
-        execute_upload(local, remote, &self.ssh, context)
+        execute_upload(local, remote, &self.ssh, &self.policy, context)
     }
 
     fn download(
@@ -303,7 +382,7 @@ impl WorkflowBackend for LiveWorkflowBackend {
         local: &str,
         context: &ErrorContext,
     ) -> RosWireResult<(u64, String)> {
-        execute_download(remote, local, &self.ssh, context)
+        execute_download(remote, local, &self.ssh, &self.policy, context)
     }
 
     fn finalize_local_download(
@@ -357,7 +436,7 @@ impl WorkflowBackend for LiveWorkflowBackend {
         timeout: Duration,
         context: &ErrorContext,
     ) -> RosWireResult<()> {
-        let session = open_ssh_session(&self.ssh, context)?;
+        let session = open_ssh_session(&self.ssh, &self.policy, context)?;
         let sftp = session.sftp().map_err(|error| {
             Box::new(
                 RosWireError::file_transfer_failed(format!("failed to open SFTP session: {error}"))
@@ -383,7 +462,7 @@ impl WorkflowBackend for LiveWorkflowBackend {
     }
 
     fn remove_remote_file(&mut self, remote: &str, context: &ErrorContext) -> RosWireResult<()> {
-        let session = open_ssh_session(&self.ssh, context)?;
+        let session = open_ssh_session(&self.ssh, &self.policy, context)?;
         let sftp = session.sftp().map_err(|error| {
             Box::new(
                 RosWireError::file_transfer_failed(format!("failed to open SFTP session: {error}"))
@@ -470,6 +549,8 @@ fn execute_transfer_for_env(
         ))));
     }
     let context = transfer_context(&command, &backend, cli, env);
+    let policy = transfer_policy(cli)
+        .map_err(|error| Box::new((*error).clone().with_context(context.clone())))?;
     let profile = load_selected_profile(cli, env)?;
     let ssh_runtime = resolve_ssh_runtime_config(cli, env, profile.as_ref())
         .map_err(|error| Box::new((*error).clone().with_context(context.clone())))?;
@@ -480,7 +561,8 @@ fn execute_transfer_for_env(
             if cli.ensure_ssh || cli.restore_ssh {
                 let control_runtime = resolve_control_runtime_config(cli, env, profile.as_ref())
                     .map_err(|error| Box::new((*error).clone().with_context(context.clone())))?;
-                let mut workflow_backend = LiveWorkflowBackend::new(ssh_runtime, control_runtime);
+                let mut workflow_backend =
+                    LiveWorkflowBackend::new(ssh_runtime, control_runtime, policy.clone());
                 execute_with_ssh_service_guard(
                     &command,
                     cli,
@@ -503,7 +585,7 @@ fn execute_transfer_for_env(
                     },
                 )
             } else {
-                execute_upload(local, remote, &ssh_runtime, &context).map(
+                execute_upload(local, remote, &ssh_runtime, &policy, &context).map(
                     |(bytes, checksum_sha256)| {
                         direct_transfer_payload(
                             command.operation(),
@@ -518,10 +600,19 @@ fn execute_transfer_for_env(
             }
         }
         TransferCommand::FileDownload { remote, local } => {
+            if prepare_local_destination(local, &policy, &context)? == DestinationDecision::Skip {
+                return Ok(skipped_transfer_payload(
+                    command.operation(),
+                    &backend,
+                    Some(redact_local_path(local)),
+                    Some(redact_remote_path(remote)),
+                ));
+            }
             if cli.ensure_ssh || cli.restore_ssh {
                 let control_runtime = resolve_control_runtime_config(cli, env, profile.as_ref())
                     .map_err(|error| Box::new((*error).clone().with_context(context.clone())))?;
-                let mut workflow_backend = LiveWorkflowBackend::new(ssh_runtime, control_runtime);
+                let mut workflow_backend =
+                    LiveWorkflowBackend::new(ssh_runtime, control_runtime, policy.clone());
                 execute_with_ssh_service_guard(
                     &command,
                     cli,
@@ -544,7 +635,7 @@ fn execute_transfer_for_env(
                     },
                 )
             } else {
-                execute_download(remote, local, &ssh_runtime, &context).map(
+                execute_download(remote, local, &ssh_runtime, &policy, &context).map(
                     |(bytes, checksum_sha256)| {
                         direct_transfer_payload(
                             command.operation(),
@@ -563,8 +654,9 @@ fn execute_transfer_for_env(
         | TransferCommand::ExportDownload { .. } => {
             let control_runtime = resolve_control_runtime_config(cli, env, profile.as_ref())
                 .map_err(|error| Box::new((*error).clone().with_context(context.clone())))?;
-            let mut backend = LiveWorkflowBackend::new(ssh_runtime, control_runtime);
-            execute_file_workflow(&command, cli, &allow_from, &mut backend, &context)
+            let mut backend =
+                LiveWorkflowBackend::new(ssh_runtime, control_runtime, policy.clone());
+            execute_file_workflow(&command, cli, &allow_from, &policy, &mut backend, &context)
         }
     }
 }
@@ -597,46 +689,76 @@ fn direct_transfer_payload(
     }
 }
 
+fn skipped_transfer_payload(
+    operation: &str,
+    backend: &str,
+    local_path: Option<String>,
+    remote_path: Option<String>,
+) -> TransferResultPayload {
+    TransferResultPayload {
+        schema_version: RESULT_SCHEMA_VERSION,
+        operation: operation.to_owned(),
+        transfer_backend: backend.to_owned(),
+        status: "skipped",
+        bytes: 0,
+        checksum_sha256: "".to_owned(),
+        paths: TransferPaths {
+            local_path,
+            remote_path,
+            temporary_remote_path: None,
+            temporary_local_path: None,
+        },
+    }
+}
+
 fn execute_file_workflow<B: WorkflowBackend>(
     command: &TransferCommand,
     cli: &Cli,
     allow_from: &[String],
+    policy: &TransferPolicy,
     backend: &mut B,
     context: &ErrorContext,
 ) -> RosWireResult<TransferResultPayload> {
     execute_with_ssh_service_guard(command, cli, allow_from, backend, context, |backend| {
-        execute_file_workflow_inner(command, cli, backend, context)
+        execute_file_workflow_inner(command, cli, policy, backend, context)
     })
 }
 
 fn execute_file_workflow_inner<B: WorkflowBackend>(
     command: &TransferCommand,
     cli: &Cli,
+    policy: &TransferPolicy,
     backend: &mut B,
     context: &ErrorContext,
 ) -> RosWireResult<TransferResultPayload> {
     match command {
         TransferCommand::Import { local } => execute_import_workflow(local, cli, backend, context),
         TransferCommand::BackupDownload { local } => execute_generated_download_workflow(
-            command.operation(),
-            local,
-            generated_backup_name(cli),
-            ControlCommand::BackupSave {
-                name: generated_backup_base_name(cli),
+            GeneratedDownloadWorkflow {
+                operation: command.operation(),
+                local,
+                remote: generated_backup_name(cli),
+                control: ControlCommand::BackupSave {
+                    name: generated_backup_base_name(cli),
+                },
+                cleanup_remote: cli.cleanup,
             },
-            cli,
+            policy,
             backend,
             context,
         ),
         TransferCommand::ExportDownload { local } => execute_generated_download_workflow(
-            command.operation(),
-            local,
-            generated_export_name(cli),
-            ControlCommand::Export {
-                file: generated_export_base_name(cli),
-                compact: cli.compact,
+            GeneratedDownloadWorkflow {
+                operation: command.operation(),
+                local,
+                remote: generated_export_name(cli),
+                control: ControlCommand::Export {
+                    file: generated_export_base_name(cli),
+                    compact: cli.compact,
+                },
+                cleanup_remote: cli.cleanup,
             },
-            cli,
+            policy,
             backend,
             context,
         ),
@@ -761,36 +883,54 @@ fn execute_import_workflow<B: WorkflowBackend>(
     })
 }
 
-fn execute_generated_download_workflow<B: WorkflowBackend>(
-    operation: &str,
-    local: &str,
+struct GeneratedDownloadWorkflow<'a> {
+    operation: &'a str,
+    local: &'a str,
     remote: String,
     control: ControlCommand,
-    cli: &Cli,
+    cleanup_remote: bool,
+}
+
+fn execute_generated_download_workflow<B: WorkflowBackend>(
+    spec: GeneratedDownloadWorkflow<'_>,
+    policy: &TransferPolicy,
     backend: &mut B,
     context: &ErrorContext,
 ) -> RosWireResult<TransferResultPayload> {
-    backend.execute_control(&control, context)?;
-    backend.wait_remote_file(&remote, WORKFLOW_FILE_WAIT_TIMEOUT, context)?;
-    let temporary_local = raw_temporary_local_path(local);
-    let (bytes, checksum_sha256) = backend.download(&remote, &temporary_local, context)?;
-    backend.finalize_local_download(&temporary_local, local, context)?;
-    if cli.cleanup {
-        backend.remove_remote_file(&remote, context)?;
+    if prepare_local_destination(spec.local, policy, context)? == DestinationDecision::Skip {
+        return Ok(skipped_transfer_payload(
+            spec.operation,
+            backend.name(),
+            Some(redact_local_path(spec.local)),
+            Some(redact_remote_path(&spec.remote)),
+        ));
+    }
+
+    backend.execute_control(&spec.control, context)?;
+    retry_transfer_step(policy, || {
+        backend.wait_remote_file(&spec.remote, policy.wait_timeout(), context)
+    })?;
+
+    let tmp_local = format!("{}.part", spec.local);
+    let (bytes, checksum_sha256) = backend.download(&spec.remote, &tmp_local, context)?;
+    backend.finalize_local_download(&tmp_local, spec.local, context)?;
+
+    if spec.cleanup_remote {
+        backend.remove_remote_file(&spec.remote, context)?;
     }
 
     Ok(TransferResultPayload {
         schema_version: RESULT_SCHEMA_VERSION,
-        operation: operation.to_owned(),
+        operation: spec.operation.to_owned(),
         transfer_backend: DEFAULT_TRANSFER_BACKEND.to_owned(),
         status: "ok",
         bytes,
         checksum_sha256,
         paths: TransferPaths {
-            local_path: Some(redact_local_path(local)),
-            remote_path: Some(redact_remote_path(&remote)),
-            temporary_remote_path: Some(redact_remote_path(&remote)),
-            temporary_local_path: Some(temporary_local_path(local)),
+            local_path: Some(redact_local_path(spec.local)),
+            remote_path: Some(redact_remote_path(&spec.remote)),
+            temporary_remote_path: Some(redact_remote_path(&spec.remote)),
+            temporary_local_path: Some(temporary_local_path(spec.local)),
         },
     })
 }
@@ -816,6 +956,8 @@ fn build_plan_for_env(
     }
 
     let context = transfer_context(&command, &backend, cli, env);
+    let policy = transfer_policy(cli)
+        .map_err(|error| Box::new((*error).clone().with_context(context.clone())))?;
     if !cli.dry_run {
         return Err(Box::new(
             RosWireError::usage(
@@ -858,7 +1000,9 @@ fn build_plan_for_env(
     let profile = load_selected_profile(cli, env)?;
     let ssh = resolve_ssh_transfer_summary(cli, env, profile.as_ref())?;
 
-    Ok(plan_from_command(command, backend, allow_from, ssh, cli))
+    Ok(plan_from_command(
+        command, backend, allow_from, ssh, cli, &policy,
+    ))
 }
 
 fn resolve_transfer_backend(cli: &Cli, env: &BTreeMap<String, String>) -> RosWireResult<String> {
@@ -960,6 +1104,7 @@ fn plan_from_command(
     allow_from: Vec<String>,
     ssh: SshTransferSummary,
     cli: &Cli,
+    policy: &TransferPolicy,
 ) -> TransferPlan {
     let mut cleanup_remote_paths = Vec::new();
     let mut cleanup_local_paths = Vec::new();
@@ -1049,6 +1194,7 @@ fn plan_from_command(
             ensure_ssh: cli.ensure_ssh,
             restore_ssh: cli.restore_ssh,
         },
+        policy: policy.plan(),
         cleanup: TransferCleanup {
             strategy: if cli.cleanup {
                 "cleanup-temporary-files".to_owned()
@@ -1608,6 +1754,108 @@ fn selected_context(context: &ErrorContext, selected_protocol: &str) -> ErrorCon
     context
 }
 
+fn transfer_policy(cli: &Cli) -> RosWireResult<TransferPolicy> {
+    if cli.retries > MAX_TRANSFER_RETRIES {
+        return Err(Box::new(RosWireError::usage(format!(
+            "--retries must be <= {MAX_TRANSFER_RETRIES}"
+        ))));
+    }
+
+    let mut policy = default_transfer_policy();
+    policy.if_exists = cli.if_exists;
+    policy.timeouts.connect_seconds = cli
+        .connect_timeout_seconds
+        .unwrap_or(DEFAULT_CONNECT_TIMEOUT_SECONDS);
+    policy.timeouts.wait_remote_file_seconds = cli
+        .wait_timeout_seconds
+        .unwrap_or(DEFAULT_WAIT_TIMEOUT_SECONDS);
+    policy.timeouts.transfer_seconds = cli
+        .transfer_timeout_seconds
+        .unwrap_or(DEFAULT_TRANSFER_TIMEOUT_SECONDS);
+    policy.timeouts.cleanup_seconds = cli
+        .cleanup_timeout_seconds
+        .unwrap_or(DEFAULT_CLEANUP_TIMEOUT_SECONDS);
+    policy.retry.max_retries = cli.retries;
+    policy.retry.delay_seconds = cli.retry_delay_seconds;
+
+    Ok(policy)
+}
+
+fn default_transfer_policy() -> TransferPolicy {
+    TransferPolicy {
+        if_exists: TransferIfExists::Overwrite,
+        timeouts: TransferTimeouts {
+            connect_seconds: DEFAULT_CONNECT_TIMEOUT_SECONDS,
+            wait_remote_file_seconds: DEFAULT_WAIT_TIMEOUT_SECONDS,
+            transfer_seconds: DEFAULT_TRANSFER_TIMEOUT_SECONDS,
+            cleanup_seconds: DEFAULT_CLEANUP_TIMEOUT_SECONDS,
+        },
+        retry: TransferRetryPolicy {
+            max_retries: 0,
+            delay_seconds: 0,
+        },
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DestinationDecision {
+    Proceed,
+    Skip,
+}
+
+fn prepare_local_destination(
+    local: &str,
+    policy: &TransferPolicy,
+    context: &ErrorContext,
+) -> RosWireResult<DestinationDecision> {
+    if !Path::new(local).exists() {
+        return Ok(DestinationDecision::Proceed);
+    }
+
+    match policy.if_exists {
+        TransferIfExists::Overwrite => Ok(DestinationDecision::Proceed),
+        TransferIfExists::Skip => Ok(DestinationDecision::Skip),
+        TransferIfExists::Fail => Err(Box::new(
+            RosWireError::file_transfer_failed(format!(
+                "destination already exists and --if-exists=fail was requested: {}",
+                redact_local_path(local)
+            ))
+            .with_context(context.clone()),
+        )),
+    }
+}
+
+fn retryable_transfer_error(error: &RosWireError) -> bool {
+    matches!(
+        error.error_code,
+        error::ErrorCode::NetworkError
+            | error::ErrorCode::FileTransferFailed
+            | error::ErrorCode::RosApiFailure
+    )
+}
+
+fn retry_transfer_step<T, F>(policy: &TransferPolicy, mut operation: F) -> RosWireResult<T>
+where
+    F: FnMut() -> RosWireResult<T>,
+{
+    let mut retries_used = 0;
+    loop {
+        match operation() {
+            Ok(value) => return Ok(value),
+            Err(error)
+                if retries_used < policy.retry.max_retries && retryable_transfer_error(&error) =>
+            {
+                retries_used += 1;
+                let delay = policy.retry_delay();
+                if !delay.is_zero() {
+                    thread::sleep(delay);
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 fn generated_backup_base_name(cli: &Cli) -> String {
     cli.name
         .clone()
@@ -1632,6 +1880,7 @@ fn execute_upload(
     local: &str,
     remote: &str,
     config: &SshRuntimeConfig,
+    policy: &TransferPolicy,
     context: &ErrorContext,
 ) -> RosWireResult<(u64, String)> {
     let metadata = fs::metadata(local).map_err(|error| {
@@ -1649,7 +1898,7 @@ fn execute_upload(
         ));
     }
 
-    let session = open_ssh_session(config, context)?;
+    let session = open_ssh_session(config, policy, context)?;
     let sftp = session.sftp().map_err(|error| {
         Box::new(
             RosWireError::file_transfer_failed(format!("failed to open SFTP session: {error}"))
@@ -1675,9 +1924,10 @@ fn execute_download(
     remote: &str,
     local: &str,
     config: &SshRuntimeConfig,
+    policy: &TransferPolicy,
     context: &ErrorContext,
 ) -> RosWireResult<(u64, String)> {
-    let session = open_ssh_session(config, context)?;
+    let session = open_ssh_session(config, policy, context)?;
     let sftp = session.sftp().map_err(|error| {
         Box::new(
             RosWireError::file_transfer_failed(format!("failed to open SFTP session: {error}"))
@@ -1701,6 +1951,7 @@ fn execute_download(
 
 fn open_ssh_session(
     config: &SshRuntimeConfig,
+    policy: &TransferPolicy,
     context: &ErrorContext,
 ) -> RosWireResult<ssh2::Session> {
     let address = format!("{}:{}", config.host, config.port);
@@ -1719,14 +1970,14 @@ fn open_ssh_session(
             )
         })?;
     let tcp =
-        TcpStream::connect_timeout(&socket_addr, Duration::from_secs(10)).map_err(|error| {
+        TcpStream::connect_timeout(&socket_addr, policy.connect_timeout()).map_err(|error| {
             Box::new(
                 RosWireError::network(format!("failed to connect to SSH service: {error}"))
                     .with_context(context.clone()),
             )
         })?;
-    tcp.set_read_timeout(Some(Duration::from_secs(30))).ok();
-    tcp.set_write_timeout(Some(Duration::from_secs(30))).ok();
+    tcp.set_read_timeout(Some(policy.transfer_timeout())).ok();
+    tcp.set_write_timeout(Some(policy.transfer_timeout())).ok();
 
     let mut session = ssh2::Session::new().map_err(|error| {
         Box::new(
@@ -1872,6 +2123,12 @@ fn plan_steps(command: &TransferCommand, cli: &Cli) -> Vec<TransferStep> {
         },
         TransferStep {
             order: 2,
+            action: "apply-transfer-policy".to_owned(),
+            description: "Apply if-exists, timeout, and finite retry policy before transfer side effects".to_owned(),
+            dry_run_side_effects: "none",
+        },
+        TransferStep {
+            order: 3,
             action: "verify-ssh-whitelist".to_owned(),
             description: "Validate allow-from CIDR values before merging with existing RouterOS SSH service address list".to_owned(),
             dry_run_side_effects: "none",
@@ -1880,7 +2137,7 @@ fn plan_steps(command: &TransferCommand, cli: &Cli) -> Vec<TransferStep> {
 
     if cli.ensure_ssh || cli.restore_ssh {
         steps.push(TransferStep {
-            order: 3,
+            order: 4,
             action: "snapshot-ssh-service".to_owned(),
             description: "Read /ip service ssh disabled/address state before transfer".to_owned(),
             dry_run_side_effects: "none",
@@ -1889,7 +2146,7 @@ fn plan_steps(command: &TransferCommand, cli: &Cli) -> Vec<TransferStep> {
 
     if cli.ensure_ssh {
         steps.push(TransferStep {
-            order: 4,
+            order: 5,
             action: "ensure-ssh-service".to_owned(),
             description: "Enable RouterOS SSH service if needed and append/merge allow-from into the existing address whitelist".to_owned(),
             dry_run_side_effects: "none",
@@ -1897,9 +2154,9 @@ fn plan_steps(command: &TransferCommand, cli: &Cli) -> Vec<TransferStep> {
     }
 
     let transfer_order = match (cli.ensure_ssh, cli.restore_ssh) {
-        (true, _) => 5,
-        (false, true) => 4,
-        (false, false) => 3,
+        (true, _) => 6,
+        (false, true) => 5,
+        (false, false) => 4,
     };
     steps.push(TransferStep {
         order: transfer_order,
@@ -2062,15 +2319,16 @@ fn read_env_map() -> BTreeMap<String, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_plan_for_env, copy_with_sha256, execute_classic_control, execute_file_workflow,
-        handle_transfer_for_env, host_key_matches, load_selected_profile, merge_ssh_allow_list,
-        parse_port, parse_transfer_command, resolve_control_runtime_config,
+        build_plan_for_env, copy_with_sha256, default_transfer_policy, execute_classic_control,
+        execute_file_workflow, handle_transfer_for_env, host_key_matches, load_selected_profile,
+        merge_ssh_allow_list, parse_port, parse_transfer_command, resolve_control_runtime_config,
         resolve_ssh_runtime_config, resolve_transfer_backend, routeros_bool, selected_context,
         sha256_fingerprint, ssh_service_snapshot_from_fields, ssh_service_snapshot_from_json,
-        validate_safe_cidr, ControlCommand, ControlRuntimeConfig, LiveWorkflowBackend,
-        SshRuntimeConfig, SshServiceSnapshot, TransferCommand, WorkflowBackend, MAX_TRANSFER_BYTES,
+        transfer_policy, validate_safe_cidr, ControlCommand, ControlRuntimeConfig,
+        LiveWorkflowBackend, SshRuntimeConfig, SshServiceSnapshot, TransferCommand,
+        WorkflowBackend, DEFAULT_CONNECT_TIMEOUT_SECONDS, MAX_TRANSFER_BYTES,
     };
-    use crate::args::Cli;
+    use crate::args::{Cli, TransferIfExists};
     use crate::error::{ErrorCode, ErrorContext};
     use crate::protocol::classic::sentence::{read_sentence, write_sentence};
     use clap::Parser;
@@ -2112,6 +2370,12 @@ mod tests {
         assert_eq!(plan.preconditions.ssh.user, "reuse-api-user");
         assert_eq!(plan.preconditions.ssh.auth_method, "password-reuses-api");
         assert_eq!(plan.preconditions.allow_from, vec!["203.0.113.10/32"]);
+        assert_eq!(plan.policy.if_exists, "overwrite");
+        assert_eq!(
+            plan.policy.timeouts.connect_seconds,
+            DEFAULT_CONNECT_TIMEOUT_SECONDS
+        );
+        assert_eq!(plan.policy.retry.max_retries, 0);
         assert_eq!(
             plan.paths.local_path.as_deref(),
             Some("***REDACTED***/setup.rsc")
@@ -2761,6 +3025,59 @@ target = "password"
     }
 
     #[test]
+    fn transfer_policy_parses_if_exists_timeout_and_retry_options() {
+        let cli = Cli::try_parse_from([
+            "roswire",
+            "file",
+            "download",
+            "flash/config.rsc",
+            "config.rsc",
+            "--if-exists",
+            "skip",
+            "--connect-timeout-seconds",
+            "3",
+            "--wait-timeout-seconds",
+            "4",
+            "--transfer-timeout-seconds",
+            "5",
+            "--cleanup-timeout-seconds",
+            "6",
+            "--retries",
+            "2",
+            "--retry-delay-seconds",
+            "0",
+        ])
+        .expect("cli should parse");
+
+        let policy = transfer_policy(&cli).expect("policy should parse");
+
+        assert_eq!(policy.if_exists, TransferIfExists::Skip);
+        assert_eq!(policy.timeouts.connect_seconds, 3);
+        assert_eq!(policy.timeouts.wait_remote_file_seconds, 4);
+        assert_eq!(policy.timeouts.transfer_seconds, 5);
+        assert_eq!(policy.timeouts.cleanup_seconds, 6);
+        assert_eq!(policy.retry.max_retries, 2);
+    }
+
+    #[test]
+    fn transfer_policy_rejects_unbounded_retry_counts() {
+        let cli = Cli::try_parse_from([
+            "roswire",
+            "file",
+            "download",
+            "flash/config.rsc",
+            "config.rsc",
+            "--retries",
+            "99",
+        ])
+        .expect("cli should parse");
+
+        let error = transfer_policy(&cli).expect_err("too many retries should fail");
+
+        assert_eq!(error.error_code, ErrorCode::UsageError);
+    }
+
+    #[test]
     fn non_transfer_tokens_are_ignored() {
         assert!(parse_transfer_command(&["ip".to_owned(), "address".to_owned()]).is_none());
     }
@@ -2804,6 +3121,7 @@ target = "password"
             &command,
             &cli,
             &[],
+            &default_transfer_policy(),
             &mut backend,
             &workflow_context("import"),
         )
@@ -2856,6 +3174,7 @@ target = "password"
             &command,
             &cli,
             &["203.0.113.10/32".to_owned()],
+            &default_transfer_policy(),
             &mut backend,
             &workflow_context("import"),
         )
@@ -2890,6 +3209,7 @@ target = "password"
             &command,
             &cli,
             &[],
+            &default_transfer_policy(),
             &mut backend,
             &workflow_context("import"),
         )
@@ -2922,6 +3242,7 @@ target = "password"
             &command,
             &cli,
             &["203.0.113.10/32".to_owned()],
+            &default_transfer_policy(),
             &mut backend,
             &workflow_context("backup/download"),
         )
@@ -2955,6 +3276,7 @@ target = "password"
             &command,
             &cli,
             &[],
+            &default_transfer_policy(),
             &mut backend,
             &workflow_context("backup/download"),
         )
@@ -2979,6 +3301,120 @@ target = "password"
     }
 
     #[test]
+    fn generated_download_if_exists_fail_stops_before_side_effects() {
+        let temp_dir = tempfile::tempdir().expect("tempdir should be created");
+        let local = temp_dir.path().join("pre-change.backup");
+        fs::write(&local, b"existing").expect("existing target should be written");
+        let local = local.display().to_string();
+        let cli = Cli::try_parse_from([
+            "roswire",
+            "backup",
+            "download",
+            &local,
+            "--if-exists",
+            "fail",
+        ])
+        .expect("cli should parse");
+        let policy = transfer_policy(&cli).expect("policy should parse");
+        let command = parse_transfer_command(&cli.tokens)
+            .expect("transfer command should be detected")
+            .expect("transfer command should parse");
+        let mut backend = FakeWorkflowBackend::default();
+
+        let error = execute_file_workflow(
+            &command,
+            &cli,
+            &[],
+            &policy,
+            &mut backend,
+            &workflow_context("backup/download"),
+        )
+        .expect_err("existing local target should fail before side effects");
+
+        assert_eq!(error.error_code, ErrorCode::FileTransferFailed);
+        assert!(backend.events.is_empty());
+    }
+
+    #[test]
+    fn generated_download_if_exists_skip_returns_skipped_payload() {
+        let temp_dir = tempfile::tempdir().expect("tempdir should be created");
+        let local = temp_dir.path().join("pre-change.backup");
+        fs::write(&local, b"existing").expect("existing target should be written");
+        let local = local.display().to_string();
+        let cli = Cli::try_parse_from([
+            "roswire",
+            "backup",
+            "download",
+            &local,
+            "--if-exists",
+            "skip",
+        ])
+        .expect("cli should parse");
+        let policy = transfer_policy(&cli).expect("policy should parse");
+        let command = parse_transfer_command(&cli.tokens)
+            .expect("transfer command should be detected")
+            .expect("transfer command should parse");
+        let mut backend = FakeWorkflowBackend::default();
+
+        let payload = execute_file_workflow(
+            &command,
+            &cli,
+            &[],
+            &policy,
+            &mut backend,
+            &workflow_context("backup/download"),
+        )
+        .expect("existing local target should be skipped");
+
+        assert_eq!(payload.status, "skipped");
+        assert_eq!(payload.bytes, 0);
+        assert!(backend.events.is_empty());
+    }
+
+    #[test]
+    fn generated_download_wait_uses_finite_retry_policy() {
+        let cli = Cli::try_parse_from([
+            "roswire",
+            "backup",
+            "download",
+            "backup.backup",
+            "--retries",
+            "1",
+            "--retry-delay-seconds",
+            "0",
+        ])
+        .expect("cli should parse");
+        let policy = transfer_policy(&cli).expect("policy should parse");
+        let command = parse_transfer_command(&cli.tokens)
+            .expect("transfer command should be detected")
+            .expect("transfer command should parse");
+        let mut backend = FakeWorkflowBackend {
+            wait_failures_remaining: 1,
+            ..FakeWorkflowBackend::default()
+        };
+
+        let payload = execute_file_workflow(
+            &command,
+            &cli,
+            &[],
+            &policy,
+            &mut backend,
+            &workflow_context("backup/download"),
+        )
+        .expect("transient wait failure should be retried");
+
+        assert_eq!(payload.status, "ok");
+        assert_eq!(
+            backend
+                .events
+                .iter()
+                .filter(|event| event.as_str() == "wait:roswire-backup.backup")
+                .count(),
+            2
+        );
+    }
+
+    #[test]
     fn export_workflow_supports_compact_control_command() {
         let cli = Cli::try_parse_from(["roswire", "export", "download", "config.rsc", "--compact"])
             .expect("cli should parse");
@@ -2991,6 +3427,7 @@ target = "password"
             &command,
             &cli,
             &[],
+            &default_transfer_policy(),
             &mut backend,
             &workflow_context("export/download"),
         )
@@ -3023,6 +3460,7 @@ target = "password"
             &command,
             &cli,
             &[],
+            &default_transfer_policy(),
             &mut backend,
             &workflow_context("backup/download"),
         )
@@ -3049,6 +3487,7 @@ target = "password"
             &command,
             &cli,
             &[],
+            &default_transfer_policy(),
             &mut backend,
             &workflow_context("import"),
         )
@@ -3347,7 +3786,9 @@ value = "profile-secret"
     struct FakeWorkflowBackend {
         events: Vec<String>,
         fail_wait: bool,
+        wait_failures_remaining: usize,
         fail_remove: bool,
+        control: ControlCommand,
         ssh_snapshot: SshServiceSnapshot,
         ssh_apply_count: usize,
         fail_ssh_apply_on: Option<usize>,
@@ -3375,7 +3816,7 @@ value = "profile-secret"
             ));
             if self.fail_ssh_apply_on == Some(self.ssh_apply_count) {
                 return Err(Box::new(
-                    crate::error::RosWireError::ros_api_failure("ssh service set failed")
+                    crate::error::RosWireError::ros_api_failure("failed to set ssh service")
                         .with_context(context.clone()),
                 ));
             }
@@ -3389,7 +3830,7 @@ value = "profile-secret"
             _context: &ErrorContext,
         ) -> crate::error::RosWireResult<(u64, String)> {
             self.events.push(format!("upload:{local}->{remote}"));
-            Ok((11, "upload-sha256".to_owned()))
+            Ok((12, "upload-sha".to_owned()))
         }
 
         fn download(
@@ -3399,7 +3840,7 @@ value = "profile-secret"
             _context: &ErrorContext,
         ) -> crate::error::RosWireResult<(u64, String)> {
             self.events.push(format!("download:{remote}->{local}"));
-            Ok((17, "download-sha256".to_owned()))
+            Ok((24, "download-sha".to_owned()))
         }
 
         fn finalize_local_download(
@@ -3430,6 +3871,15 @@ value = "profile-secret"
             context: &ErrorContext,
         ) -> crate::error::RosWireResult<()> {
             self.events.push(format!("wait:{remote}"));
+            if self.wait_failures_remaining > 0 {
+                self.wait_failures_remaining -= 1;
+                return Err(Box::new(
+                    crate::error::RosWireError::ros_api_failure(format!(
+                        "timed out waiting for remote file: {remote}"
+                    ))
+                    .with_context(context.clone()),
+                ));
+            }
             if self.fail_wait {
                 return Err(Box::new(
                     crate::error::RosWireError::ros_api_failure(format!(
@@ -3531,6 +3981,7 @@ value = "profile-secret"
                 password: "api-secret".to_owned(),
                 selected_protocol: selected_protocol.to_owned(),
             },
+            default_transfer_policy(),
         )
     }
 
