@@ -20,6 +20,18 @@ fn default_config_version() -> u32 {
     1
 }
 
+fn default_logging_enabled() -> bool {
+    true
+}
+
+fn default_logging_retention_days() -> u16 {
+    30
+}
+
+fn default_logging_level() -> String {
+    "info".to_owned()
+}
+
 const DEFAULT_MASTER_KEY_ENV: &str = "ROSWIRE_MASTER_KEY";
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -30,6 +42,28 @@ pub struct ConfigFile {
     pub default_profile: Option<String>,
     #[serde(default)]
     pub profiles: BTreeMap<String, ProfileConfig>,
+    #[serde(default)]
+    pub logging: LoggingConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct LoggingConfig {
+    #[serde(default = "default_logging_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_logging_retention_days")]
+    pub retention_days: u16,
+    #[serde(default = "default_logging_level")]
+    pub level: String,
+}
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_logging_enabled(),
+            retention_days: default_logging_retention_days(),
+            level: default_logging_level(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -114,6 +148,7 @@ pub struct ConfigInspect {
     pub schema_version: String,
     pub active_profile: String,
     pub paths: ConfigInspectPaths,
+    pub logging: LoggingConfig,
     pub resolved: BTreeMap<String, ResolvedField>,
     pub secrets: BTreeMap<String, SecretInspectField>,
     pub warnings: Vec<String>,
@@ -617,6 +652,7 @@ pub fn inspect_config(
             config: paths.config.display().to_string(),
             logs: paths.logs.display().to_string(),
         },
+        logging: config.logging.clone(),
         resolved,
         secrets,
         warnings: Vec::new(),
@@ -1273,6 +1309,28 @@ mod tests {
     }
 
     #[test]
+    fn logging_config_defaults_and_partial_overrides_are_stable() {
+        let default_config = parse_config_toml("version = 1").expect("config should parse");
+        assert!(default_config.logging.enabled);
+        assert_eq!(default_config.logging.retention_days, 30);
+        assert_eq!(default_config.logging.level, "info");
+
+        let custom = parse_config_toml(
+            r#"
+version = 1
+
+[logging]
+enabled = false
+retention_days = 7
+"#,
+        )
+        .expect("config should parse");
+        assert!(!custom.logging.enabled);
+        assert_eq!(custom.logging.retention_days, 7);
+        assert_eq!(custom.logging.level, "info");
+    }
+
+    #[test]
     fn select_profile_uses_cli_then_env_then_default() {
         let config = ConfigFile {
             version: 1,
@@ -1281,6 +1339,7 @@ mod tests {
                 ("home".to_owned(), ProfileConfig::default()),
                 ("office".to_owned(), ProfileConfig::default()),
             ]),
+            logging: LoggingConfig::default(),
         };
 
         let selected = select_active_profile(Some("office"), Some("home"), &config)
@@ -1323,6 +1382,7 @@ mod tests {
             version: 1,
             default_profile: Some("home".to_owned()),
             profiles: BTreeMap::from([("home".to_owned(), ProfileConfig::default())]),
+            logging: LoggingConfig::default(),
         };
 
         let error = select_active_profile(Some("missing"), None, &config)
@@ -1359,6 +1419,7 @@ mod tests {
                     ..ProfileConfig::default()
                 },
             )]),
+            logging: LoggingConfig::default(),
         };
 
         let env = BTreeMap::from([
@@ -1399,6 +1460,7 @@ mod tests {
                 source: ValueSource::Profile,
             })
         );
+        assert_eq!(inspect.logging, LoggingConfig::default());
     }
 
     #[test]
@@ -1608,6 +1670,7 @@ mod tests {
                     ..ProfileConfig::default()
                 },
             )]),
+            logging: LoggingConfig::default(),
         };
 
         let secret = generated_secret();

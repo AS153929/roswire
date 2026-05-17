@@ -2,6 +2,7 @@ pub mod args;
 pub mod config;
 pub mod error;
 pub mod introspect;
+pub mod logging;
 pub mod mapping;
 pub mod protocol;
 pub mod transfer;
@@ -24,7 +25,23 @@ use std::time::Duration;
 
 pub fn run() -> RosWireResult<()> {
     let cli = Cli::parse();
+    let env = read_env_map();
+    let mut logger = logging::RuntimeLogger::initialize(&cli, &env);
+    if let Some(payload) = logger.debug_payload() {
+        eprintln!("{payload}");
+    }
+    logger.log_start();
 
+    let result = run_with_cli(&cli);
+    match &result {
+        Ok(()) => logger.log_success(),
+        Err(error) => logger.log_error(error),
+    }
+
+    result
+}
+
+fn run_with_cli(cli: &Cli) -> RosWireResult<()> {
     if cli.simulate_error {
         return Err(Box::new(
             error::RosWireError::usage("simulated usage error for contract tests")
@@ -32,19 +49,19 @@ pub fn run() -> RosWireResult<()> {
         ));
     }
 
-    if let Some(result) = config::handle(&cli.tokens, &cli) {
+    if let Some(result) = config::handle(&cli.tokens, cli) {
         let payload = result?;
         println!("{payload}");
         return Ok(());
     }
 
-    if let Some(result) = introspect::handle(&cli.tokens, &cli) {
+    if let Some(result) = introspect::handle(&cli.tokens, cli) {
         let payload = result?;
         println!("{payload}");
         return Ok(());
     }
 
-    if let Some(result) = transfer::handle(&cli.tokens, &cli) {
+    if let Some(result) = transfer::handle(&cli.tokens, cli) {
         let payload = result?;
         println!("{payload}");
         return Ok(());
@@ -53,7 +70,7 @@ pub fn run() -> RosWireResult<()> {
     let invocation = args::parse_invocation(&cli.tokens)?;
     let request = mapping::build_protocol_request(&invocation)?;
 
-    let target = resolve_execution_target(&cli)?;
+    let target = resolve_execution_target(cli)?;
     if target.requested_protocol == "auto" {
         return execute_auto(&invocation, &request, &target);
     }
