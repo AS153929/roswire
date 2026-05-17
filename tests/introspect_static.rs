@@ -19,6 +19,7 @@ fn commands_json_contains_catalog_entries() {
         .stdout(predicate::str::contains("interface wireguard peers print"))
         .stdout(predicate::str::contains("system package print"))
         .stdout(predicate::str::contains("script put"))
+        .stdout(predicate::str::contains("raw"))
         .stdout(predicate::str::contains("tool mac-server print"))
         .stdout(predicate::str::contains("tool netwatch print"))
         .stdout(predicate::str::contains("user print"))
@@ -79,6 +80,20 @@ fn help_script_put_returns_command_details() {
         .stdout(predicate::str::contains("\"name\":\"script put\""))
         .stdout(predicate::str::contains("--source"))
         .stdout(predicate::str::contains("without creating a RouterOS file"));
+}
+
+#[test]
+fn help_raw_returns_command_details() {
+    let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
+    cmd.args(["help", "raw", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"schema_version\":\"roswire.command.help.v1\"",
+        ))
+        .stdout(predicate::str::contains("\"name\":\"raw\""))
+        .stdout(predicate::str::contains("--allow-write"))
+        .stdout(predicate::str::contains("classic API path"));
 }
 
 #[test]
@@ -284,6 +299,20 @@ fn schema_script_put_is_registered() {
         ))
         .stdout(predicate::str::contains("\"command\":\"script put\""))
         .stdout(predicate::str::contains("\"name\":\"--source\""));
+}
+
+#[test]
+fn schema_raw_is_registered() {
+    let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
+    cmd.args(["schema", "command", "raw", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"schema_version\":\"roswire.command.schema.v1\"",
+        ))
+        .stdout(predicate::str::contains("\"command\":\"raw\""))
+        .stdout(predicate::str::contains("routeros-path"))
+        .stdout(predicate::str::contains("--allow-write"));
 }
 
 #[test]

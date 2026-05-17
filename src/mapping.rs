@@ -19,6 +19,7 @@ pub enum ActionKind {
     Add,
     Set,
     Remove,
+    Raw,
 }
 
 impl ActionKind {
@@ -28,6 +29,7 @@ impl ActionKind {
             Self::Add => "add",
             Self::Set => "set",
             Self::Remove => "remove",
+            Self::Raw => "raw",
         }
     }
 }
@@ -72,6 +74,10 @@ pub struct CommandMapping {
 impl CommandMapping {
     pub fn has_rest_mapping(&self) -> bool {
         self.rest_mapping.is_some()
+    }
+
+    pub fn is_raw(&self) -> bool {
+        self.cli_path.as_slice() == ["raw"]
     }
 }
 
@@ -147,6 +153,7 @@ pub fn resolve_mapping(invocation: &ParsedInvocation) -> RosWireResult<CommandMa
     let action = invocation.action.as_str();
 
     match (path.as_slice(), action) {
+        (["raw"], raw_path) => raw_mapping(raw_path),
         (["interface"], "print") => Ok(print_mapping(
             &["interface"],
             "/interface/print",
@@ -345,6 +352,62 @@ fn write_mapping(
         side_effects: vec![side_effect.to_owned()],
         idempotency: idempotency.to_owned(),
         rest_mapping,
+    }
+}
+
+fn raw_mapping(raw_path: &str) -> RosWireResult<CommandMapping> {
+    let routeros_path = normalize_raw_routeros_path(raw_path)?;
+    let action_kind = raw_action_kind(&routeros_path);
+    let is_print = action_kind == ActionKind::Print;
+
+    Ok(CommandMapping {
+        cli_path: vec!["raw".to_owned()],
+        action_kind,
+        routeros_path,
+        side_effects: if is_print {
+            Vec::new()
+        } else {
+            vec!["raw-routeros-command".to_owned()]
+        },
+        idempotency: if is_print {
+            "read-only".to_owned()
+        } else {
+            "unknown".to_owned()
+        },
+        rest_mapping: None,
+    })
+}
+
+fn normalize_raw_routeros_path(raw_path: &str) -> RosWireResult<String> {
+    let raw_path = raw_path.trim();
+    if !raw_path.starts_with('/') {
+        return Err(Box::new(RosWireError::usage(
+            "raw command requires a RouterOS API path starting with `/`, e.g. roswire raw /system/resource/print --json",
+        )));
+    }
+
+    if raw_path == "/" || raw_path.contains(char::is_whitespace) {
+        return Err(Box::new(RosWireError::usage(
+            "raw RouterOS path must be a single non-empty token without whitespace",
+        )));
+    }
+
+    if raw_path.split('/').skip(1).any(str::is_empty) {
+        return Err(Box::new(RosWireError::usage(
+            "raw RouterOS path must not contain empty path segments",
+        )));
+    }
+
+    Ok(raw_path.to_owned())
+}
+
+fn raw_action_kind(routeros_path: &str) -> ActionKind {
+    match routeros_path.rsplit('/').next() {
+        Some("print") => ActionKind::Print,
+        Some("add") => ActionKind::Add,
+        Some("set") => ActionKind::Set,
+        Some("remove") => ActionKind::Remove,
+        _ => ActionKind::Raw,
     }
 }
 
@@ -628,6 +691,56 @@ mod tests {
                 .map(String::as_str),
             Some("***REDACTED***"),
         );
+    }
+
+    #[test]
+    fn maps_raw_print_passthrough_to_classic_words_only() {
+        let request = build_protocol_request(&invocation(
+            &["raw"],
+            "/system/resource/print",
+            &[("detail", "yes")],
+        ))
+        .expect("raw print should map");
+
+        assert!(request.mapping.is_raw());
+        assert_eq!(request.mapping.action_kind, ActionKind::Print);
+        assert_eq!(request.mapping.routeros_path, "/system/resource/print");
+        assert!(request.mapping.side_effects.is_empty());
+        assert_eq!(request.mapping.idempotency, "read-only");
+        assert!(!request.mapping.has_rest_mapping());
+        assert_eq!(
+            request.classic_api_words(),
+            vec![
+                "/system/resource/print".to_owned(),
+                "=detail=yes".to_owned(),
+            ],
+        );
+    }
+
+    #[test]
+    fn maps_raw_write_passthrough_with_unknown_idempotency() {
+        let request = build_protocol_request(&invocation(
+            &["raw"],
+            "/tool/fetch",
+            &[("url", "https://example.invalid/a.rsc")],
+        ))
+        .expect("raw write should map");
+
+        assert!(request.mapping.is_raw());
+        assert_eq!(request.mapping.action_kind, ActionKind::Raw);
+        assert_eq!(request.mapping.routeros_path, "/tool/fetch");
+        assert_eq!(request.mapping.side_effects, vec!["raw-routeros-command"]);
+        assert_eq!(request.mapping.idempotency, "unknown");
+        assert!(!request.mapping.has_rest_mapping());
+    }
+
+    #[test]
+    fn raw_passthrough_requires_absolute_routeros_path() {
+        let error = build_protocol_request(&invocation(&["raw"], "system/resource/print", &[]))
+            .expect_err("raw path should require slash");
+
+        assert_eq!(error.error_code, ErrorCode::UsageError);
+        assert!(error.message.contains("starting with `/`"));
     }
 
     #[test]
