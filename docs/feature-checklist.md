@@ -108,7 +108,7 @@
 - [ ] `/ip/firewall` 命令族
 - [ ] `/ip/route` 命令族
 - [ ] `/interface/wireguard` 命令族
-- [ ] `/system/package` 命令族
+- [x] `/system/package` 命令族（print，#73）
 - [ ] `/user` 命令族
 - [ ] `/tool` 命令族
 - [ ] 原始命令透传模式
@@ -170,7 +170,7 @@
 - [x] doctor 本地配置/权限/依赖检查
 - [x] doctor 远端协议与错误分类检查
 - [ ] schema cache TTL / refresh 策略完整产品化
-- [ ] 更多 RouterOS 菜单的远端字段/枚举覆盖
+- [ ] 更多 RouterOS 菜单的远端字段/枚举覆盖（已覆盖 system package print 的静态字段，#73）
 
 ## SSH/SFTP 文件传输
 
@@ -343,7 +343,7 @@
 - #70 `M7: 扩展 /ip/firewall 命令族`
 - #71 `M7: 扩展 /ip/route 命令族`
 - #72 `M7: 扩展 /interface/wireguard 命令族`
-- #73 `M7: 扩展 /system/package 命令族`
+- #73 `M7: 扩展 /system/package 命令族`（完成：print）
 - #74 `M7: 扩展 /user 命令族`
 - #75 `M7: 扩展 /tool 命令族`
 - #76 `Cleanup: 审计 unsupported/not implemented 文案与 checklist 同步`

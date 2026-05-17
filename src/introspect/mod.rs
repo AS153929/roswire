@@ -386,6 +386,20 @@ fn catalog() -> Vec<CommandDefinition> {
             ],
         },
         CommandDefinition {
+            name: "system package print".to_owned(),
+            summary: "Print installed RouterOS packages.".to_owned(),
+            kind: "routeros-command".to_owned(),
+            syntax: "roswire system package print --json".to_owned(),
+            arguments: vec![],
+            examples: vec!["roswire system package print --json".to_owned()],
+            errors: vec![
+                "USAGE_ERROR".to_owned(),
+                "AUTH_FAILED".to_owned(),
+                "NETWORK_ERROR".to_owned(),
+                "ROS_API_FAILURE".to_owned(),
+            ],
+        },
+        CommandDefinition {
             name: "config inspect".to_owned(),
             summary: "Inspect resolved local configuration and source precedence.".to_owned(),
             kind: "config".to_owned(),

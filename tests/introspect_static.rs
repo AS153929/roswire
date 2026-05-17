@@ -11,6 +11,7 @@ fn commands_json_contains_catalog_entries() {
             "\"schema_version\":\"roswire.commands.v1\"",
         ))
         .stdout(predicate::str::contains("ip address add"))
+        .stdout(predicate::str::contains("system package print"))
         .stdout(predicate::str::contains("doctor"));
 }
 
@@ -37,6 +38,23 @@ fn help_doctor_returns_command_details() {
         ))
         .stdout(predicate::str::contains("\"name\":\"doctor\""))
         .stdout(predicate::str::contains("--include-remote"));
+}
+
+#[test]
+fn help_system_package_returns_command_details() {
+    let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
+    cmd.args(["help", "system", "package", "print", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"schema_version\":\"roswire.command.help.v1\"",
+        ))
+        .stdout(predicate::str::contains(
+            "\"name\":\"system package print\"",
+        ))
+        .stdout(predicate::str::contains(
+            "Print installed RouterOS packages.",
+        ));
 }
 
 #[test]
@@ -138,6 +156,21 @@ fn schema_command_returns_argument_list() {
 }
 
 #[test]
+fn schema_system_package_print_is_registered() {
+    let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
+    cmd.args(["schema", "command", "system", "package", "print", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"schema_version\":\"roswire.command.schema.v1\"",
+        ))
+        .stdout(predicate::str::contains(
+            "\"command\":\"system package print\"",
+        ))
+        .stdout(predicate::str::contains("\"arguments\":[]"));
+}
+
+#[test]
 fn unknown_help_topic_returns_structured_error() {
     let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
     cmd.args(["help", "unknown", "topic", "--json"])
@@ -218,6 +251,25 @@ fn schema_command_remote_returns_single_degraded_overlay() {
     .stdout(predicate::str::contains("\"commands\":"))
     .stdout(predicate::str::contains("\"name\":\"ip address add\""))
     .stdout(predicate::str::contains("creates-routeros-record"))
+    .stdout(predicate::str::contains("\"support\":\"unknown\""));
+}
+
+#[test]
+fn schema_command_remote_system_package_has_static_fields() {
+    let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
+    let temp = tempfile::tempdir().expect("temp dir should be created");
+    cmd.env("ROSWIRE_HOME", temp.path().join("missing-home"));
+    cmd.args([
+        "schema", "command", "system", "package", "print", "--remote", "--json",
+    ])
+    .assert()
+    .success()
+    .stderr(predicate::str::is_empty())
+    .stdout(predicate::str::contains(
+        "\"name\":\"system package print\"",
+    ))
+    .stdout(predicate::str::contains("\"output_fields_observed\""))
+    .stdout(predicate::str::contains("\"version\""))
     .stdout(predicate::str::contains("\"support\":\"unknown\""));
 }
 

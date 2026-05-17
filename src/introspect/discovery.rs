@@ -178,6 +178,13 @@ fn static_output_fields(command: &str) -> Vec<String> {
             "architecture-name".to_owned(),
             "board-name".to_owned(),
         ],
+        "system package print" => vec![
+            ".id".to_owned(),
+            "name".to_owned(),
+            "version".to_owned(),
+            "build-time".to_owned(),
+            "disabled".to_owned(),
+        ],
         "interface print" => vec![".id".to_owned(), "name".to_owned(), "disabled".to_owned()],
         "ip address print" => vec![
             ".id".to_owned(),
@@ -314,5 +321,29 @@ mod tests {
         assert_eq!(policies.len(), 1);
         assert_eq!(policies[0].name, "ip address print");
         assert_eq!(policies[0].idempotency, "read-only");
+    }
+
+    #[test]
+    fn degraded_snapshot_includes_system_package_static_fields() {
+        let fp = unknown_fingerprint("198.51.100.10", "unknown");
+        let policies = vec![StaticCommandPolicy {
+            name: "system package print".to_owned(),
+            side_effects: Vec::new(),
+            idempotency: "read-only".to_owned(),
+        }];
+
+        let snapshot = degraded_remote_schema_snapshot(
+            "studio",
+            &fp,
+            policies,
+            warning_name(ErrorCode::ConfigError),
+        );
+
+        assert_eq!(snapshot.commands[0].name, "system package print");
+        assert_eq!(snapshot.commands[0].idempotency, "read-only");
+        assert_eq!(
+            snapshot.commands[0].output_fields_observed,
+            vec![".id", "name", "version", "build-time", "disabled"]
+        );
     }
 }

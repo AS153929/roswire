@@ -269,6 +269,31 @@ mod tests {
     }
 
     #[test]
+    fn rest_system_package_print_reads_json_array() {
+        let server = TestServer::responding_with(
+            200,
+            "application/json",
+            r#"[{".id":"*1","name":"routeros","version":"7.15.3"}]"#,
+        );
+        let credential = test_credential();
+        let client = RestClient::with_base_url(server.base_url(), "admin", &credential);
+        let request = build_protocol_request(&ParsedInvocation {
+            path: vec!["system".to_owned(), "package".to_owned()],
+            action: "print".to_owned(),
+            resolved_args: BTreeMap::new(),
+        })
+        .expect("request should map");
+
+        let value = client
+            .execute_request(&request)
+            .expect("REST package print should work");
+        let http_request = server.request();
+
+        assert_eq!(value[0]["name"], "routeros");
+        assert!(http_request.contains("GET /rest/system/package HTTP/1.1"));
+    }
+
+    #[test]
     fn rest_patch_expands_id_and_sends_json_body() {
         let server = TestServer::responding_with(200, "application/json", r#"{}"#);
         let credential = test_credential();
