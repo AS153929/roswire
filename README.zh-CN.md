@@ -49,13 +49,26 @@ cargo install roswire --locked
 
 ## 快速开始
 
-1. 配置 profile 与认证信息
+这条路径面向全新安装：先安装并检查本机环境，再创建一个 profile，把密码放在 shell history 之外，最后执行第一条只读 RouterOS 命令。
 
-设备、连接和传输字段通过命令行参数或 `~/.roswire/config.toml` profile 提供。`roswire` 不再从 `ROS_*` 环境变量读取单设备配置，避免多设备自动化时误连目标。下面示例使用 `env` secret 后端只保存环境变量名；生产环境也可以改用 keychain 或 encrypted secret。
+1. 安装并运行本地诊断
 
 ```bash
-export ROSWIRE_STUDIO_PASSWORD="your_password"
+curl -fsSL https://raw.githubusercontent.com/AS153929/roswire/main/scripts/install.sh | sh
+roswire doctor --json
+```
+
+`doctor` 默认只检查本机环境；只有传入 `--include-remote` 时才会访问 RouterOS。
+
+1. 初始化本地配置
+
+```bash
 roswire config init --json
+```
+
+1. 创建并检查 RouterOS profile
+
+```bash
 roswire config device add studio \
   host=192.168.88.1 \
   user=admin \
@@ -65,59 +78,105 @@ roswire config device add studio \
   ssh_host_key=SHA256:replace-with-routeros-host-key \
   allow_from=203.0.113.10/32 \
   --json
+roswire config profiles --json
+roswire --profile studio config inspect --json
+```
+
+1. 保存密码，避免把明文写入 shell history
+
+`env` secret 后端只在 `config.toml` 里保存环境变量名；secret 值保留在当前进程环境中。
+
+```bash
+read -rsp 'RouterOS password: ' ROSWIRE_STUDIO_PASSWORD; echo
+export ROSWIRE_STUDIO_PASSWORD
 roswire config secret set studio password type=env env=ROSWIRE_STUDIO_PASSWORD --json
 ```
 
-1. 执行命令（Agent 模式）
-
-以结构化 JSON 获取 IP 地址列表：
+生产环境优先使用可用的系统钥匙链或 encrypted secret 后端。先用平台钥匙链工具保存 secret，再只把引用写入 `roswire`：
 
 ```bash
-roswire ip address print --json
+roswire config secret set studio password type=keychain service=roswire account=profiles/studio/password --json
 ```
 
-输出（`stdout`）：
-
-```json
-[
-  {
-    ".id": "*1",
-    "address": "192.168.88.1/24",
-    "network": "192.168.88.0",
-    "interface": "bridge",
-    "actual-interface": "bridge",
-    "disabled": false
-  }
-]
-```
-
-1. 错误处理（Agent 模式）
-
-当命令失败时，`roswire` 以非零状态码退出，并向 `stderr` 写入结构化错误：
+1. 执行第一条只读 RouterOS 命令
 
 ```bash
-roswire ip address add interface=invalid_eth address=10.0.0.1/24 --json
+roswire --profile studio interface print --json
 ```
 
-输出（`stderr`，退出码：`1`）：
+成功结果以结构化 JSON 写入 `stdout`；错误以单个结构化 JSON 对象写入 `stderr`。
 
-```json
-{
-  "error_code": "ROS_API_FAILURE",
-  "message": "no such interface (invalid_eth)",
-  "hint": "先运行 `roswire interface print --json` 查看可用接口。",
-  "context": {
-    "command": "ip/address/add",
-    "requested_protocol": "auto",
-    "selected_protocol": "rest",
-    "routeros_version": "v7",
-    "host": "192.168.88.1",
-    "resolved_args": {
-      "address": "10.0.0.1/24",
-      "interface": "invalid_eth"
-    }
-  }
-}
+## 常见任务
+
+| 意图 | 命令 |
+| --- | --- |
+| 检查本机环境 | `roswire doctor --json` |
+| 创建或检查 profile | `roswire config init --json`、`roswire config profiles --json`、`roswire --profile studio config inspect --json` |
+| 安全保存凭据 | `roswire config secret set studio password type=env env=ROSWIRE_STUDIO_PASSWORD --json` 或 `type=keychain` |
+| 查看接口、地址、路由和资源 | `roswire --profile studio interface print --json`、`ip address print`、`ip route print`、`system resource print` |
+| 执行未内置的只读 RouterOS print 命令 | `roswire --profile studio raw /system/resource/print --json` |
+| 安全预览文件传输 | `roswire --profile studio file upload ./setup.rsc flash/setup.rsc --dry-run --ssh-host-key SHA256:replace-with-routeros-host-key --allow-from 203.0.113.10/32 --json` |
+
+## 命令使用示例
+
+本地诊断：
+
+```bash
+roswire doctor --json
+```
+
+创建与检查 profile：
+
+```bash
+roswire config init --json
+roswire config device add studio host=192.168.88.1 user=admin protocol=auto routeros_version=auto transfer=ssh --json
+roswire config profiles --json
+roswire --profile studio config inspect --json
+```
+
+不在命令行参数中写入密码值的 secret 设置：
+
+```bash
+read -rsp 'RouterOS password: ' ROSWIRE_STUDIO_PASSWORD; echo
+export ROSWIRE_STUDIO_PASSWORD
+roswire config secret set studio password type=env env=ROSWIRE_STUDIO_PASSWORD --json
+
+read -rsp 'SSH key passphrase: ' ROSWIRE_STUDIO_SSH_KEY_PASSPHRASE; echo
+export ROSWIRE_STUDIO_SSH_KEY_PASSPHRASE
+roswire config secret set studio ssh_key_passphrase type=env env=ROSWIRE_STUDIO_SSH_KEY_PASSPHRASE --json
+
+roswire config secret set studio password type=keychain service=roswire account=profiles/studio/password --json
+```
+
+常用只读 RouterOS 命令：
+
+```bash
+roswire --profile studio interface print --json
+roswire --profile studio ip address print --json
+roswire --profile studio ip route print --json
+roswire --profile studio system resource print --json
+```
+
+高级 RouterOS 路径的 raw 只读 print 命令：
+
+```bash
+roswire --profile studio raw /system/resource/print --json
+roswire --profile studio raw /interface/print detail=yes --json
+```
+
+带显式 SSH 安全输入的传输 dry-run：
+
+```bash
+roswire --profile studio file upload ./setup.rsc flash/setup.rsc \
+  --dry-run \
+  --ssh-host-key SHA256:replace-with-routeros-host-key \
+  --allow-from 203.0.113.10/32 \
+  --json
+roswire --profile studio file download flash/config.rsc ./config.rsc \
+  --dry-run \
+  --ssh-host-key SHA256:replace-with-routeros-host-key \
+  --allow-from 203.0.113.10/32 \
+  --json
 ```
 
 ## CLI 契约
@@ -126,21 +185,15 @@ roswire ip address add interface=invalid_eth address=10.0.0.1/24 --json
 roswire [global-options] <path...> <action> [key=value ...]
 ```
 
-示例：
+配置优先级有意保持简单：
 
-```bash
-roswire interface print --json
-roswire ip address add address=192.168.88.2/24 interface=bridge --json
-roswire ip address remove .id=*1 --json
-```
-
-配置优先级：
-
-1. 命令行参数
+1. 命令行参数，包括 `--profile`、`--host`、`--user`、`--protocol`、`--routeros-version` 等全局参数
 1. `~/.roswire/config.toml` 中的 profile
 1. 协议默认值
 
-本地配置目录为 `~/.roswire/`，默认配置文件为 `config.toml`，本地日志写入 `~/.roswire/logs/` 并最多保留 30 天。密码默认建议保存到本机钥匙链；配置文件只保存 secret 引用。
+本地配置目录默认为 `~/.roswire/`，包含 `config.toml`，本地日志写入 `~/.roswire/logs/` 并最多保留 30 天。密码默认建议保存到本机钥匙链，或通过 secret 后端引用；配置文件只保存 secret 引用。
+
+设备字段对应 profile key：`host`、`user`、`protocol`、`routeros_version`、`transfer`、`port`、`ssh_port`、`ssh_user`、`ssh_key`、`ssh_host_key`、`allow_from`。这些设备字段**不会**来自单设备 `ROS_*` 环境变量；环境变量只作为进程级设置或 secret 后端输入。
 
 进程级环境变量与 secret 后端变量：
 
@@ -151,7 +204,9 @@ roswire ip address remove .id=*1 --json
 | `ROSWIRE_MASTER_KEY` | encrypted secret 默认 master key；也可用 secret 的 `key_id` 指向其它变量 |
 | profile secret `type=env` 指向的自定义变量 | 例如 `ROSWIRE_STUDIO_PASSWORD`，只作为 secret 后端读取，不参与设备字段优先级 |
 
-设备字段对应 profile key：`host`、`user`、`protocol`、`routeros_version`、`transfer`、`port`、`ssh_port`、`ssh_user`、`ssh_key`、`ssh_host_key`、`allow_from`；密码和 SSH passphrase 使用 profile secret（`password`、`ssh_password`、`ssh_key_passphrase`）。
+密码和 SSH passphrase 使用 profile secret：`password`、`ssh_password`、`ssh_key_passphrase`。
+
+详细文档：[`docs/installation.md`](docs/installation.md)、[`docs/release.md`](docs/release.md)、[`docs/routeros-acceptance-matrix.md`](docs/routeros-acceptance-matrix.md)、[`docs/production-readiness.md`](docs/production-readiness.md)。
 
 ## Agent 自描述接口
 

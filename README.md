@@ -49,13 +49,26 @@ For manual installation steps, Cargo installation notes, Windows PowerShell chec
 
 ## Quick start
 
-1. Configure a profile and credentials
+This path starts with a fresh install, checks the local environment, creates one profile, stores the password outside shell history, and runs the first read-only RouterOS command.
 
-Device, connection, and transfer fields come from command-line options or profiles in `~/.roswire/config.toml`. `roswire` no longer reads single-device `ROS_*` environment variables, which avoids accidental cross-device operations in automation. The example below uses the `env` secret backend, which stores only the environment variable name; production deployments can use keychain or encrypted secrets instead.
+1. Install and run local diagnostics
 
 ```bash
-export ROSWIRE_STUDIO_PASSWORD="your_password"
+curl -fsSL https://raw.githubusercontent.com/AS153929/roswire/main/scripts/install.sh | sh
+roswire doctor --json
+```
+
+`doctor` only checks the local machine by default. It does not contact RouterOS unless `--include-remote` is passed.
+
+1. Initialize local configuration
+
+```bash
 roswire config init --json
+```
+
+1. Create and inspect a RouterOS profile
+
+```bash
 roswire config device add studio \
   host=192.168.88.1 \
   user=admin \
@@ -65,59 +78,105 @@ roswire config device add studio \
   ssh_host_key=SHA256:replace-with-routeros-host-key \
   allow_from=203.0.113.10/32 \
   --json
+roswire config profiles --json
+roswire --profile studio config inspect --json
+```
+
+1. Store the password without putting it in shell history
+
+The `env` secret backend stores only the environment variable name in `config.toml`; the secret value stays in the current process environment.
+
+```bash
+read -rsp 'RouterOS password: ' ROSWIRE_STUDIO_PASSWORD; echo
+export ROSWIRE_STUDIO_PASSWORD
 roswire config secret set studio password type=env env=ROSWIRE_STUDIO_PASSWORD --json
 ```
 
-1. Run commands in agent mode
-
-Fetch IP addresses as structured JSON:
+For production hosts, prefer an OS keychain or encrypted secret backend when available. Store the secret with your platform keychain tool first, then save only the reference in `roswire`:
 
 ```bash
-roswire ip address print --json
+roswire config secret set studio password type=keychain service=roswire account=profiles/studio/password --json
 ```
 
-Output (`stdout`):
-
-```json
-[
-  {
-    ".id": "*1",
-    "address": "192.168.88.1/24",
-    "network": "192.168.88.0",
-    "interface": "bridge",
-    "actual-interface": "bridge",
-    "disabled": false
-  }
-]
-```
-
-1. Handle errors in agent mode
-
-When a command fails, `roswire` exits non-zero and writes one structured error to `stderr`:
+1. Run the first read-only RouterOS command
 
 ```bash
-roswire ip address add interface=invalid_eth address=10.0.0.1/24 --json
+roswire --profile studio interface print --json
 ```
 
-Output (`stderr`, exit code `1`):
+Output (`stdout`) is structured JSON; errors go to `stderr` as one structured JSON object.
 
-```json
-{
-  "error_code": "ROS_API_FAILURE",
-  "message": "no such interface (invalid_eth)",
-  "hint": "Run `roswire interface print --json` first to inspect available interfaces.",
-  "context": {
-    "command": "ip/address/add",
-    "requested_protocol": "auto",
-    "selected_protocol": "rest",
-    "routeros_version": "v7",
-    "host": "192.168.88.1",
-    "resolved_args": {
-      "address": "10.0.0.1/24",
-      "interface": "invalid_eth"
-    }
-  }
-}
+## Common tasks
+
+| Intent | Command |
+| --- | --- |
+| Check local setup | `roswire doctor --json` |
+| Create or inspect profiles | `roswire config init --json`, `roswire config profiles --json`, `roswire --profile studio config inspect --json` |
+| Store credentials safely | `roswire config secret set studio password type=env env=ROSWIRE_STUDIO_PASSWORD --json` or `type=keychain` |
+| Inventory interfaces, addresses, routes, and resources | `roswire --profile studio interface print --json`, `ip address print`, `ip route print`, `system resource print` |
+| Run unsupported read-only RouterOS print commands | `roswire --profile studio raw /system/resource/print --json` |
+| Preview file transfers safely | `roswire --profile studio file upload ./setup.rsc flash/setup.rsc --dry-run --ssh-host-key SHA256:replace-with-routeros-host-key --allow-from 203.0.113.10/32 --json` |
+
+## Command usage examples
+
+Local diagnostics:
+
+```bash
+roswire doctor --json
+```
+
+Profile creation and inspection:
+
+```bash
+roswire config init --json
+roswire config device add studio host=192.168.88.1 user=admin protocol=auto routeros_version=auto transfer=ssh --json
+roswire config profiles --json
+roswire --profile studio config inspect --json
+```
+
+Secret setup without command-line password values:
+
+```bash
+read -rsp 'RouterOS password: ' ROSWIRE_STUDIO_PASSWORD; echo
+export ROSWIRE_STUDIO_PASSWORD
+roswire config secret set studio password type=env env=ROSWIRE_STUDIO_PASSWORD --json
+
+read -rsp 'SSH key passphrase: ' ROSWIRE_STUDIO_SSH_KEY_PASSPHRASE; echo
+export ROSWIRE_STUDIO_SSH_KEY_PASSPHRASE
+roswire config secret set studio ssh_key_passphrase type=env env=ROSWIRE_STUDIO_SSH_KEY_PASSPHRASE --json
+
+roswire config secret set studio password type=keychain service=roswire account=profiles/studio/password --json
+```
+
+Common read-only RouterOS commands:
+
+```bash
+roswire --profile studio interface print --json
+roswire --profile studio ip address print --json
+roswire --profile studio ip route print --json
+roswire --profile studio system resource print --json
+```
+
+Raw read-only print commands for advanced RouterOS paths:
+
+```bash
+roswire --profile studio raw /system/resource/print --json
+roswire --profile studio raw /interface/print detail=yes --json
+```
+
+Transfer dry runs with explicit SSH safety inputs:
+
+```bash
+roswire --profile studio file upload ./setup.rsc flash/setup.rsc \
+  --dry-run \
+  --ssh-host-key SHA256:replace-with-routeros-host-key \
+  --allow-from 203.0.113.10/32 \
+  --json
+roswire --profile studio file download flash/config.rsc ./config.rsc \
+  --dry-run \
+  --ssh-host-key SHA256:replace-with-routeros-host-key \
+  --allow-from 203.0.113.10/32 \
+  --json
 ```
 
 ## CLI contract
@@ -126,21 +185,15 @@ Output (`stderr`, exit code `1`):
 roswire [global-options] <path...> <action> [key=value ...]
 ```
 
-Examples:
+Configuration precedence is intentionally simple:
 
-```bash
-roswire interface print --json
-roswire ip address add address=192.168.88.2/24 interface=bridge --json
-roswire ip address remove .id=*1 --json
-```
-
-Configuration precedence:
-
-1. Command-line options
+1. Command-line options, including global options such as `--profile`, `--host`, `--user`, `--protocol`, and `--routeros-version`
 1. Profile values in `~/.roswire/config.toml`
 1. Protocol defaults
 
-The local configuration directory is `~/.roswire/` by default. It contains `config.toml`, local logs under `~/.roswire/logs/`, and keeps logs for up to 30 days. Passwords should preferably be stored in the local keychain; config files should store secret references only.
+The local configuration directory is `~/.roswire/` by default. It contains `config.toml`, local logs under `~/.roswire/logs/`, and keeps logs for up to 30 days. Passwords should preferably be stored in the local keychain or referenced through a secret backend; config files should store secret references only.
+
+Device fields map to these profile keys: `host`, `user`, `protocol`, `routeros_version`, `transfer`, `port`, `ssh_port`, `ssh_user`, `ssh_key`, `ssh_host_key`, and `allow_from`. These device fields do **not** come from single-device `ROS_*` environment variables. Environment variables are process-level settings or secret-backend inputs only.
 
 Process-level environment variables and secret-backend variables:
 
@@ -151,7 +204,9 @@ Process-level environment variables and secret-backend variables:
 | `ROSWIRE_MASTER_KEY` | Default master key for encrypted secrets; a secret `key_id` can point to another variable. |
 | Custom variables referenced by profile secrets with `type=env` | For example `ROSWIRE_STUDIO_PASSWORD`; read only through the secret backend and never used for device field precedence. |
 
-Device fields map to these profile keys: `host`, `user`, `protocol`, `routeros_version`, `transfer`, `port`, `ssh_port`, `ssh_user`, `ssh_key`, `ssh_host_key`, and `allow_from`. Passwords and SSH key passphrases use profile secrets: `password`, `ssh_password`, and `ssh_key_passphrase`.
+Passwords and SSH key passphrases use profile secrets: `password`, `ssh_password`, and `ssh_key_passphrase`.
+
+Detailed docs: [`docs/installation.md`](docs/installation.md), [`docs/release.md`](docs/release.md), [`docs/routeros-acceptance-matrix.md`](docs/routeros-acceptance-matrix.md), and [`docs/production-readiness.md`](docs/production-readiness.md).
 
 ## Agent self-description APIs
 
