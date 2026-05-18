@@ -326,7 +326,7 @@ impl RosWireError {
     }
 
     pub fn to_json_payload(&self) -> String {
-        serde_json::to_string(self).unwrap_or_else(|_| {
+        serde_json::to_string_pretty(self).unwrap_or_else(|_| {
             "{\"error_code\":\"SERIALIZATION_ERROR\",\"message\":\"failed to serialize error\"}"
                 .to_owned()
         })

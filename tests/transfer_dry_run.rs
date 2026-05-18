@@ -1,6 +1,10 @@
 use assert_cmd::Command;
-use predicates::prelude::*;
+use predicates::prelude::PredicateBooleanExt;
 use std::fs;
+
+mod common;
+
+use common::predicate;
 
 #[test]
 fn file_upload_dry_run_writes_plan_to_stdout_only() {

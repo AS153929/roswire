@@ -1,9 +1,13 @@
 use assert_cmd::Command;
-use predicates::prelude::*;
+use predicates::prelude::PredicateBooleanExt;
 use std::fs;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+
+mod common;
+
+use common::predicate;
 
 #[test]
 fn binary_supports_version_flag() {

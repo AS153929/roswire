@@ -1,5 +1,9 @@
 use assert_cmd::Command;
-use predicates::prelude::*;
+use predicates::prelude::PredicateBooleanExt;
+
+mod common;
+
+use common::predicate;
 
 #[test]
 fn commands_json_contains_catalog_entries() {

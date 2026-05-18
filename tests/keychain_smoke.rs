@@ -1,7 +1,11 @@
 use assert_cmd::Command;
-use predicates::prelude::*;
+use predicates::prelude::PredicateBooleanExt;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
+
+mod common;
+
+use common::predicate;
 
 const SERVICE: &str = "roswire-ci-smoke";
 

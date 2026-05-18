@@ -276,7 +276,7 @@ fn explain_error_payload(tokens: &[String]) -> RosWireResult<String> {
 }
 
 fn render_json<T: Serialize>(value: &T) -> RosWireResult<String> {
-    serde_json::to_string(value).map_err(|error| {
+    serde_json::to_string_pretty(value).map_err(|error| {
         Box::new(RosWireError::internal(format!(
             "failed to serialize introspection payload: {error}",
         )))

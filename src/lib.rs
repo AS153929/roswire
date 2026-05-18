@@ -282,7 +282,7 @@ fn redact_sensitive_json_fields(value: &mut Value) {
 }
 
 fn serialize_payload<T: Serialize>(value: &T, label: &str) -> RosWireResult<String> {
-    serde_json::to_string(value).map_err(|error| {
+    serde_json::to_string_pretty(value).map_err(|error| {
         Box::new(error::RosWireError::internal(format!(
             "failed to serialize {label}: {error}",
         )))
@@ -900,10 +900,13 @@ value = "v1:nonce:ciphertext"
         let payload =
             render_protocol_payload(&request, "api-ssl", &rows).expect("payload should serialize");
 
-        assert!(payload.contains("\"schema_version\":\"roswire.write.v1\""));
-        assert!(payload.contains("\"command\":\"ip/address/add\""));
-        assert!(payload.contains("\"selected_protocol\":\"api-ssl\""));
-        assert!(payload.contains("\"response\":[]"));
+        assert!(
+            payload.contains("\"schema_version\": \"roswire.write.v1\""),
+            "{payload}"
+        );
+        assert!(payload.contains("\"command\": \"ip/address/add\""));
+        assert!(payload.contains("\"selected_protocol\": \"api-ssl\""));
+        assert!(payload.contains("\"response\": []"));
     }
 
     #[test]
@@ -929,7 +932,7 @@ value = "v1:nonce:ciphertext"
 
         assert_eq!(sanitized["source"], "***REDACTED***");
         assert_eq!(sanitized["nested"]["password"], "***REDACTED***");
-        assert!(payload.contains("\"schema_version\":\"roswire.write.v1\""));
+        assert!(payload.contains("\"schema_version\": \"roswire.write.v1\""));
         assert!(!payload.contains(":put secret"));
         assert!(!payload.contains("super-secret"));
     }
@@ -992,9 +995,9 @@ value = "v1:nonce:ciphertext"
         let payload = render_protocol_payload(&request, "api", &response)
             .expect("raw write payload should serialize");
 
-        assert!(payload.contains("\"schema_version\":\"roswire.write.v1\""));
-        assert!(payload.contains("\"command\":\"tool/fetch\""));
-        assert!(payload.contains("\"action\":\"raw\""));
+        assert!(payload.contains("\"schema_version\": \"roswire.write.v1\""));
+        assert!(payload.contains("\"command\": \"tool/fetch\""));
+        assert!(payload.contains("\"action\": \"raw\""));
     }
 
     #[test]

@@ -1,6 +1,10 @@
 use assert_cmd::Command;
-use predicates::prelude::*;
+use predicates::prelude::PredicateBooleanExt;
 use tempfile::TempDir;
+
+mod common;
+
+use common::predicate;
 
 fn run(temp: &TempDir, args: &[&str]) -> assert_cmd::assert::Assert {
     let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");

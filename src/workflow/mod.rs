@@ -176,7 +176,7 @@ fn redact_local_path(path: &Path) -> String {
 }
 
 fn render_json<T: Serialize>(value: &T) -> RosWireResult<String> {
-    serde_json::to_string(value).map_err(|error| {
+    serde_json::to_string_pretty(value).map_err(|error| {
         Box::new(RosWireError::internal(format!(
             "failed to serialize workflow payload: {error}",
         )))
@@ -218,9 +218,9 @@ mod tests {
             panic!("dry-run should return payload");
         };
         assert!(payload.contains("roswire.workflow.script.put.plan.v1"));
-        assert!(payload.contains("\"script_name\":\"bootstrap\""));
+        assert!(payload.contains("\"script_name\": \"bootstrap\""));
         assert!(payload.contains("***REDACTED***/bootstrap.rsc"));
-        assert!(payload.contains("\"routeros_file_created\":false"));
+        assert!(payload.contains("\"routeros_file_created\": false"));
         assert!(!payload.contains(temp.path().to_string_lossy().as_ref()));
         assert!(!payload.contains(script));
     }
