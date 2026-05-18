@@ -21,22 +21,27 @@ jobs:
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             archive: roswire-linux-amd64.tar.gz
+            smoke: true
           - asset_name: roswire-linux-arm64
             os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             archive: roswire-linux-arm64.tar.gz
+            smoke: false
           - asset_name: roswire-macos-amd64
             os: macos-13
             target: x86_64-apple-darwin
             archive: roswire-macos-amd64.tar.gz
+            smoke: true
           - asset_name: roswire-macos-arm64
             os: macos-13
             target: aarch64-apple-darwin
             archive: roswire-macos-arm64.tar.gz
+            smoke: false
           - asset_name: roswire-windows-amd64
             os: windows-latest
             target: x86_64-pc-windows-msvc
             archive: roswire-windows-amd64.zip
+            smoke: true
 
     steps:
       - name: Checkout
@@ -59,17 +64,22 @@ jobs:
         run: "cargo build --release --locked --target ${{ matrix.target }}"
 
       - name: Smoke test release binary (Unix)
-        if: runner.os != 'Windows'
+        if: ${{ runner.os != 'Windows' && matrix.smoke }}
         shell: bash
         run: |
           set -euo pipefail
           "target/${{ matrix.target }}/release/roswire" doctor --json > smoke.json
 
       - name: Smoke test release binary (Windows)
-        if: runner.os == 'Windows'
+        if: ${{ runner.os == 'Windows' && matrix.smoke }}
         shell: pwsh
         run: |
           .\target\${{ matrix.target }}\release\roswire.exe doctor --json | Out-File -Encoding utf8 smoke.json
+
+      - name: Skip smoke test for cross-compiled target
+        if: ${{ ! matrix.smoke }}
+        run: |
+          echo "Skipping smoke test for ${{ matrix.target }} because the hosted runner cannot execute this architecture."
 
       - name: Package binary (Unix)
         if: runner.os != 'Windows'
