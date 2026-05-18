@@ -227,7 +227,7 @@
 
 - [x] `--ensure-ssh` CLI 参数
 - [x] `--restore-ssh` CLI 参数
-- [x] `--allow-from` CLI/env 参数
+- [x] `--allow-from` CLI/profile 参数
 - [x] dry-run 中声明 SSH 前置条件
 - [x] CIDR 安全校验
 - [x] 拒绝过宽 IPv4 白名单
