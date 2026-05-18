@@ -5,26 +5,28 @@
 [![Language: Rust](https://img.shields.io/badge/language-Rust-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-`roswire` 是一个轻量、JSON 优先的命令行桥接工具，面向需要操作 MikroTik RouterOS 设备的 **AI Agent** 与自动化脚本。
+**Language / 语言:** English | [简体中文](README.zh-CN.md)
 
-与面向人类交互的传统 CLI 不同，`roswire` 不输出颜色、加载动画（spinner）、分页器（pager），也不做交互式提问。它的契约很简单：成功结果写入 `stdout`，结构化错误和诊断信息写入 `stderr`。
+`roswire` is a lightweight, JSON-first command-line bridge for **AI agents** and automation scripts that need to operate MikroTik RouterOS devices.
 
-> **项目状态：** 当前为 MVP / Beta 候选。核心 JSON-first CLI、配置、协议路由、自描述、SSH 文件传输、文件工作流和发布工程已经闭环；生产级稳定版仍受真机/CHR 矩阵阻塞。生产级门槛见 [`docs/production-readiness.md`](docs/production-readiness.md)，开发计划见 [`docs/develop-plan.md`](docs/develop-plan.md)。
+Unlike traditional CLIs designed for human interaction, `roswire` does not emit colors, spinners, pagers, or interactive prompts. Its contract is simple: successful results go to `stdout`; structured errors and diagnostics go to `stderr`.
 
-## 核心特性
+> **Project status:** MVP / beta candidate. The core JSON-first CLI, configuration, protocol routing, self-description APIs, SSH file transfer, file workflows, and release engineering are in place. Production-stable status is still gated by the real RouterOS / CHR acceptance matrix. See [`docs/production-readiness.md`](docs/production-readiness.md) for production gates and [`docs/develop-plan.md`](docs/develop-plan.md) for the development plan.
 
-- **JSON 优先契约**：机器可读输出是 Agent 运行时和脚本集成的稳定接口。
-- **严格流隔离**：`stdout` 只承载成功结果；`stderr` 承载错误、调试日志和诊断信息。
-- **默认非交互**：缺少参数时直接返回结构化 JSON 错误，而不是等待用户输入。
-- **协议与方言分层**：支持 RouterOS 原生 API（`8728`/`8729`）的 v6/v7 方言，以及 RouterOS v7 REST API。
-- **单个原生二进制目标**：以一个 Rust 二进制文件发布，不要求 Node.js/Python/Go 等外部运行时。
-- **便于 Agent 自我修正**：错误包含稳定错误码、脱敏上下文和可选修复提示。
+## Key features
 
-## 安装
+- **JSON-first contract:** machine-readable output is the stable interface for agents and scripts.
+- **Strict stream separation:** `stdout` contains successful results only; `stderr` contains errors, debug logs, and diagnostics.
+- **Non-interactive by default:** missing inputs fail with structured JSON errors instead of waiting for user input.
+- **Protocol and dialect layering:** supports RouterOS native API (`8728` / `8729`) with v6/v7 dialects plus RouterOS v7 REST API.
+- **Single native binary:** distributed as one Rust binary; no Node.js, Python, Go, or other runtime required.
+- **Agent-friendly self-correction:** errors include stable error codes, redacted context, and optional repair hints.
 
-预编译二进制由 GitHub Releases 提供，并随 release 附带 `checksums.txt`。安装前应先校验 SHA256，再解压或复制到 `PATH`。
+## Installation
 
-Linux/macOS 快速示例：
+Prebuilt binaries are published through GitHub Releases, with a `checksums.txt` file attached to each release. Verify the SHA256 checksum before extracting or copying the binary into `PATH`.
+
+Linux/macOS quick example:
 
 ```bash
 curl -L https://github.com/AS153929/roswire/releases/latest/download/roswire-linux-amd64.tar.gz -o roswire-linux-amd64.tar.gz
@@ -35,13 +37,13 @@ sudo install -m 0755 roswire /usr/local/bin/roswire
 roswire doctor --json
 ```
 
-完整安装、Windows PowerShell 校验、源码构建和卸载步骤见 [`docs/installation.md`](docs/installation.md)。维护者发布流程见 [`docs/release.md`](docs/release.md)。
+For complete installation steps, Windows PowerShell checksum verification, source builds, and uninstall instructions, see [`docs/installation.md`](docs/installation.md). Maintainer release procedures are documented in [`docs/release.md`](docs/release.md).
 
-## 快速开始
+## Quick start
 
-1. 配置 profile 与认证信息
+1. Configure a profile and credentials
 
-设备、连接和传输字段通过命令行参数或 `~/.roswire/config.toml` profile 提供。`roswire` 不再从 `ROS_*` 环境变量读取单设备配置，避免多设备自动化时误连目标。下面示例使用 `env` secret 后端只保存环境变量名；生产环境也可以改用 keychain 或 encrypted secret。
+Device, connection, and transfer fields come from command-line options or profiles in `~/.roswire/config.toml`. `roswire` no longer reads single-device `ROS_*` environment variables, which avoids accidental cross-device operations in automation. The example below uses the `env` secret backend, which stores only the environment variable name; production deployments can use keychain or encrypted secrets instead.
 
 ```bash
 export ROSWIRE_STUDIO_PASSWORD="your_password"
@@ -58,15 +60,15 @@ roswire config device add studio \
 roswire config secret set studio password type=env env=ROSWIRE_STUDIO_PASSWORD --json
 ```
 
-1. 执行命令（Agent 模式）
+1. Run commands in agent mode
 
-以结构化 JSON 获取 IP 地址列表：
+Fetch IP addresses as structured JSON:
 
 ```bash
 roswire ip address print --json
 ```
 
-输出（`stdout`）：
+Output (`stdout`):
 
 ```json
 [
@@ -81,21 +83,21 @@ roswire ip address print --json
 ]
 ```
 
-1. 错误处理（Agent 模式）
+1. Handle errors in agent mode
 
-当命令失败时，`roswire` 以非零状态码退出，并向 `stderr` 写入结构化错误：
+When a command fails, `roswire` exits non-zero and writes one structured error to `stderr`:
 
 ```bash
 roswire ip address add interface=invalid_eth address=10.0.0.1/24 --json
 ```
 
-输出（`stderr`，退出码：`1`）：
+Output (`stderr`, exit code `1`):
 
 ```json
 {
   "error_code": "ROS_API_FAILURE",
   "message": "no such interface (invalid_eth)",
-  "hint": "先运行 `roswire interface print --json` 查看可用接口。",
+  "hint": "Run `roswire interface print --json` first to inspect available interfaces.",
   "context": {
     "command": "ip/address/add",
     "requested_protocol": "auto",
@@ -110,13 +112,13 @@ roswire ip address add interface=invalid_eth address=10.0.0.1/24 --json
 }
 ```
 
-## CLI 契约
+## CLI contract
 
 ```text
 roswire [global-options] <path...> <action> [key=value ...]
 ```
 
-示例：
+Examples:
 
 ```bash
 roswire interface print --json
@@ -124,30 +126,30 @@ roswire ip address add address=192.168.88.2/24 interface=bridge --json
 roswire ip address remove .id=*1 --json
 ```
 
-配置优先级：
+Configuration precedence:
 
-1. 命令行参数
-1. `~/.roswire/config.toml` 中的 profile
-1. 协议默认值
+1. Command-line options
+1. Profile values in `~/.roswire/config.toml`
+1. Protocol defaults
 
-本地配置目录为 `~/.roswire/`，默认配置文件为 `config.toml`，本地日志写入 `~/.roswire/logs/` 并最多保留 30 天。密码默认建议保存到本机钥匙链；配置文件只保存 secret 引用。
+The local configuration directory is `~/.roswire/` by default. It contains `config.toml`, local logs under `~/.roswire/logs/`, and keeps logs for up to 30 days. Passwords should preferably be stored in the local keychain; config files should store secret references only.
 
-进程级环境变量与 secret 后端变量：
+Process-level environment variables and secret-backend variables:
 
-| 变量 | 用途 |
+| Variable | Purpose |
 | --- | --- |
-| `ROSWIRE_HOME` | 覆盖默认 `~/.roswire` 目录，主要用于测试或便携环境 |
-| `ROSWIRE_DEBUG` | 启用脱敏 debug 诊断输出 |
-| `ROSWIRE_MASTER_KEY` | encrypted secret 默认 master key；也可用 secret 的 `key_id` 指向其它变量 |
-| profile secret `type=env` 指向的自定义变量 | 例如 `ROSWIRE_STUDIO_PASSWORD`，只作为 secret 后端读取，不参与设备字段优先级 |
+| `ROSWIRE_HOME` | Override the default `~/.roswire` directory, mainly for tests or portable environments. |
+| `ROSWIRE_DEBUG` | Enable redacted debug diagnostics. |
+| `ROSWIRE_MASTER_KEY` | Default master key for encrypted secrets; a secret `key_id` can point to another variable. |
+| Custom variables referenced by profile secrets with `type=env` | For example `ROSWIRE_STUDIO_PASSWORD`; read only through the secret backend and never used for device field precedence. |
 
-设备字段对应 profile key：`host`、`user`、`protocol`、`routeros_version`、`transfer`、`port`、`ssh_port`、`ssh_user`、`ssh_key`、`ssh_host_key`、`allow_from`；密码和 SSH passphrase 使用 profile secret（`password`、`ssh_password`、`ssh_key_passphrase`）。
+Device fields map to these profile keys: `host`, `user`, `protocol`, `routeros_version`, `transfer`, `port`, `ssh_port`, `ssh_user`, `ssh_key`, `ssh_host_key`, and `allow_from`. Passwords and SSH key passphrases use profile secrets: `password`, `ssh_password`, and `ssh_key_passphrase`.
 
-## Agent 自描述接口
+## Agent self-description APIs
 
-`roswire` 面向 Agent 使用，因此所有关键帮助和配置检查都必须提供稳定 JSON 输出。Agent 不需要解析人类帮助文本。
+`roswire` is intended for agent use, so all important help and configuration inspection surfaces provide stable JSON. Agents do not need to parse human help text.
 
-常用自描述命令：
+Common self-description commands:
 
 ```bash
 roswire help --json
@@ -162,55 +164,55 @@ roswire doctor --json
 roswire explain-error ROS_API_FAILURE --json
 ```
 
-约定：
+Conventions:
 
-- `help --json` 是机器可读帮助，输出完整命令目录、参数结构、示例、输出 schema、错误码和自愈提示；`--help` 保留给人类阅读。
-- `config inspect --json` 输出解析后的 profile、字段来源和 secret 状态，但永远脱敏密码、token 和私钥。
-- `doctor --json` 默认只做本地检查；只有显式传入 `--include-remote` 才访问 RouterOS。
-- 默认帮助和 schema 来自 `roswire` 内置静态目录；传入 `--remote` 才连接 RouterOS，叠加设备实际版本、协议能力、可观测字段和运行时枚举值。
-- 远端 schema 发现结果可以缓存到 `~/.roswire/cache/`，但必须按 RouterOS 版本、build time、packages 和协议能力失效；缓存不能包含 secret 或完整本地路径。
-- 自描述输出包含 `schema_version`，便于 Agent 做兼容判断。
+- `help --json` is machine-readable help with the command catalog, argument shape, examples, output schemas, error codes, and repair hints; `--help` remains for humans.
+- `config inspect --json` reports the active profile, resolved field sources, and secret status, but always redacts passwords, tokens, and private key paths.
+- `doctor --json` runs local checks by default; it reaches RouterOS only when `--include-remote` is passed.
+- Static help and schemas come from `roswire`'s built-in catalog by default. `--remote` connects to RouterOS and overlays real device version, protocol capabilities, observable fields, and runtime enum values.
+- Remote schema discovery can cache results under `~/.roswire/cache/`, but cache invalidation must include RouterOS version, build time, packages, and protocol capability; caches must never contain secrets or full local paths.
+- Self-description outputs include `schema_version` so agents can make compatibility decisions.
 
-## 调用优先级
+## Protocol selection
 
-当 `protocol=auto`（默认）时，`roswire` 会在首次连接阶段执行只读探测，判断 RouterOS 版本与可用协议，然后把实际命令路由到合适后端。
+When `protocol=auto` (the default), `roswire` performs read-only probing on first connection to determine the RouterOS version and available protocols, then routes the actual command to the best backend.
 
-固定优先级如下：
+Fixed precedence:
 
-1. 显式指定非 `auto` 的 `--protocol` 或 profile `protocol` 时，严格按指定协议调用，不自动改道。
-1. 自动模式下优先探测 `rest`，再探测 `api-ssl`，最后探测 `api`。
-1. 如果确认是 RouterOS v7，且 REST 可用、当前动作有 REST 映射，则优先走 REST。
-1. 如果 REST 不可用，或者当前动作没有 REST 映射，则回落到 RouterOS v7 原生 API 方言。
-1. 如果确认是 RouterOS v6，则只走原生 API v6 方言；REST 不参与路由。
+1. If `--protocol` or profile `protocol` explicitly sets a non-`auto` protocol, use it strictly and do not auto-reroute.
+1. In automatic mode, probe `rest` first, then `api-ssl`, then `api`.
+1. If the device is RouterOS v7, REST is available, and the current action has a REST mapping, prefer REST.
+1. If REST is unavailable or the action has no REST mapping, fall back to the RouterOS v7 native API dialect.
+1. If the device is RouterOS v6, use only the native API v6 dialect; REST is not part of v6 routing.
 
-探测失败时的处理也要稳定：网络不可达或服务未开启时继续尝试下一个候选协议；认证失败属于终止错误，不用另一个协议静默重试，以免掩盖凭据问题。
+Probe failure handling is stable: network unreachable or disabled service errors continue to the next candidate; authentication failure is terminal and does not silently retry another protocol, because doing so could hide credential problems.
 
-## 原生 API 方言
+## Native API dialects
 
-RouterOS v6 与 v7 都支持原生 API，但它们在登录流程、菜单字段、错误返回和命令可用性上存在差异。`roswire` 的实现策略是：
+RouterOS v6 and v7 both support the native API, but they differ in login flows, menu fields, error returns, and available commands. `roswire` uses this implementation strategy:
 
-- 共享 TCP/TLS 连接、RouterOS sentence 编解码和 `!re`/`!done`/`!trap` 解析。
-- 分开实现 v6 与 v7 的登录兼容、字段归一化、动作映射和测试 fixture。
-- 默认使用 `routeros_version=auto` 自动探测；必要时可以通过 `--routeros-version` 或 profile 显式设置为 `v6` / `v7`，避免 Agent 在不确定环境里误判。
-- 允许方言层保留适度重复代码，优先换取行为清晰和测试稳定；但不复制底层传输与编码逻辑。
+- Share TCP/TLS connections, RouterOS sentence encoding/decoding, and `!re` / `!done` / `!trap` parsing.
+- Keep v6 and v7 login compatibility, field normalization, action mappings, and test fixtures separate.
+- Default to `routeros_version=auto` probing; use `--routeros-version` or a profile value to force `v6` / `v7` in controlled environments.
+- Allow some deliberate duplication in dialect code to keep behavior clear and tests stable, but do not duplicate the low-level transport and encoding logic.
 
-## 协议映射
+## Protocol mappings
 
-| CLI 命令 | 原生 API（v6/v7 方言） | REST API |
+| CLI command | Native API (v6/v7 dialects) | REST API |
 | --- | --- | --- |
 | `roswire ip address print` | `/ip/address/print` | `GET /rest/ip/address` |
 | `roswire ip address add address=1.1.1.1 interface=ether1` | `/ip/address/add` | `PUT /rest/ip/address` |
 | `roswire ip address set .id=*1 disabled=true` | `/ip/address/set` | `PATCH /rest/ip/address/*1` |
 | `roswire ip address remove .id=*1` | `/ip/address/remove` | `DELETE /rest/ip/address/*1` |
 
-## 客户端文件上传下载
+## Client-side file upload and download
 
-`roswire` 应该支持“本机客户端 ↔ RouterOS 设备”的文件工作流，例如上传 `.rsc` 脚本、导入配置、生成并下载备份。这里要分清两层：
+`roswire` supports local-client-to-RouterOS file workflows such as uploading `.rsc` scripts, importing configuration, generating backups, and downloading artifacts. These workflows have two layers:
 
-- **控制面**：用 API/REST 执行 RouterOS 命令，例如 `/import`、`/export file=...`、`/system/backup/save`、`/file print`。
-- **数据面**：真正传输文件字节，不能依赖 API sentence 或 REST JSON 直接承载大文件。
+- **Control plane:** API/REST commands such as `/import`, `/export file=...`, `/system/backup/save`, and `/file print`.
+- **Data plane:** actual file-byte transfer; API sentences and REST JSON must not be treated as a general large-file transport.
 
-目标命令形态示例：
+Target command shapes:
 
 ```bash
 roswire file upload ./setup.rsc flash/setup.rsc --transfer ssh --json
@@ -219,37 +221,37 @@ roswire backup download ./backup.backup --name pre-change --ensure-ssh --allow-f
 roswire export download ./config.rsc --compact --ensure-ssh --allow-from 203.0.113.10/32 --cleanup --json
 ```
 
-推荐策略：
+Recommended strategy:
 
-- 上传普通文件：走 SSH transfer 后端，把本机文件放到 RouterOS 文件系统，再按需执行后续命令。
-- 上传并执行 `.rsc`：先上传到临时路径，再通过 API/REST 执行 `/import file-name=...`，成功后可删除临时文件。
-- 创建并下载备份：先通过 API/REST 执行 `/system/backup/save name=...`，再通过 SSH transfer 后端下载生成的 `.backup` 文件。
-- 创建并下载导出配置：先执行 `/export file=...`，再下载生成的 `.rsc` 文件。
-- 写入 `/system/script`：如果只是把本地文本作为脚本 source，可以直接通过 API/REST 设置 `source=@local-file` 的内容，不必先上传成文件；需要限制大小并禁止二进制。
+- Plain file upload: use the SSH transfer backend to place a local file on the RouterOS filesystem, then run follow-up commands if needed.
+- Upload and execute `.rsc`: upload to a temporary path, execute `/import file-name=...` through API/REST, and optionally delete the temporary file after success.
+- Create and download backups: run `/system/backup/save name=...`, then download the resulting `.backup` file through SSH transfer.
+- Create and download exports: run `/export file=...`, then download the generated `.rsc` file.
+- Write `/system/script`: when the source is local text, API/REST can write `source=@local-file` contents directly without creating a RouterOS file; size limits and binary rejection still apply.
 
-文件传输只支持 SSH 通道。`roswire` 可以通过 API/REST 检查并配置 `/ip service ssh`：启用 SSH 服务、设置端口、把 `--allow-from` 或 profile `allow_from` 写入服务的 `address` 白名单。默认不擅自打开 SSH；只有显式传入 `--ensure-ssh` 时才允许修改设备服务配置。传输结束后可以按策略恢复原始 SSH 服务状态。
+File transfer uses SSH only. `roswire` can inspect and configure `/ip service ssh` through API/REST: enable SSH, set the port, and merge `--allow-from` or profile `allow_from` into the service `address` whitelist. It never opens SSH implicitly; it may modify the device service only when `--ensure-ssh` is explicitly provided. Transfer cleanup can restore the original SSH service state according to policy.
 
-注意：profile `host` 或 `--host` 必须是可路由的 IP 地址或 DNS 名。RouterOS 的 MAC 地址只适用于二层发现/邻居发现场景，当前 CLI 的 API、REST 与 SSH 连接不支持 MAC 地址直连。
+Note: profile `host` or `--host` must be a routable IP address or DNS name. RouterOS MAC addresses are for Layer 2 neighbor discovery and are not supported by the current API, REST, or SSH connection paths.
 
-实现阶段必须验证目标 RouterOS 版本实际支持的 SSH 文件传输子协议，并统一封装在 `ssh` transfer 后端下。不要默认假设 REST API 支持 multipart 上传，也不要保留 FTP、`/tool fetch` 等其它文件传输后端。
+The SSH transfer backend must validate the actual SSH file-transfer subprotocols supported by the target RouterOS version. Do not assume REST multipart upload support, and do not keep FTP, `/tool fetch`, or other transfer backends.
 
-## 架构
+## Architecture
 
 ```mermaid
 flowchart TD
   agent[Agent / LLM]
 
   subgraph roswire[roswire]
-    parser[参数解析器<br/>clap]
-    context[上下文引擎<br/>CLI / profile / 配置加载]
-    schema[自描述与 schema 引擎<br/>静态目录 / 远端覆盖 / 缓存]
-    router[协议路由器<br/>根据配置选择 API / REST]
-    discovery[首次连接探测<br/>版本 / 能力 / 优先级]
-    classic[原生 API 传输层<br/>TCP / TLS + sentence codec]
-    v6[RouterOS v6 方言]
-    v7[RouterOS v7 方言]
-    transfer[SSH 文件传输层<br/>upload / download]
-    sshPrep[SSH 服务准备<br/>启用 / 白名单 / 恢复]
+    parser[Argument parser<br/>clap]
+    context[Context engine<br/>CLI / profile / config loading]
+    schema[Self-description and schema engine<br/>static catalog / remote overlay / cache]
+    router[Protocol router<br/>select API / REST from config]
+    discovery[First-connection probing<br/>version / capability / precedence]
+    classic[Native API transport<br/>TCP / TLS + sentence codec]
+    v6[RouterOS v6 dialect]
+    v7[RouterOS v7 dialect]
+    transfer[SSH file-transfer layer<br/>upload / download]
+    sshPrep[SSH service preparation<br/>enable / whitelist / restore]
 
     parser --> context
     parser --> schema
@@ -265,26 +267,26 @@ flowchart TD
     transfer --> sshPrep
   end
 
-  legacy6[RouterOS v6 原生 API]
-  legacy7[RouterOS v7 原生 API]
+  legacy6[RouterOS v6 native API]
+  legacy7[RouterOS v7 native API]
   rest[RouterOS v7 REST API]
-  ssh[RouterOS SSH 服务]
+  ssh[RouterOS SSH service]
 
-  agent -->|CLI 调用<br/>例如 roswire ip address print --json| parser
-  v6 -->|原始 TCP / TLS| legacy6
-  v7 -->|原始 TCP / TLS| legacy7
+  agent -->|CLI call<br/>for example roswire ip address print --json| parser
+  v6 -->|raw TCP / TLS| legacy6
+  v7 -->|raw TCP / TLS| legacy7
   discovery -->|HTTP / JSON| rest
-  sshPrep -->|API / REST 设置 /ip service ssh| discovery
+  sshPrep -->|API / REST sets /ip service ssh| discovery
   transfer -->|SSH / 22| ssh
 ```
 
-## 开发路线
+## Development roadmap
 
-实现计划记录在 [`docs/develop-plan.md`](docs/develop-plan.md)。当前优先级如下：
+The implementation plan lives in [`docs/develop-plan.md`](docs/develop-plan.md). Current priorities:
 
-1. Rust 项目脚手架与 CLI 解析。
-1. 稳定 JSON 错误模型与输出流隔离。
-1. 首次连接探测、协议优先级与自动路由。
-1. RouterOS 原生 API 共享传输层与 v6/v7 方言实现。
-1. RouterOS v7 REST 协议实现。
-1. 基于 RouterOS CHR 或专用测试设备的集成测试。
+1. Rust project scaffolding and CLI parsing.
+1. Stable JSON error model and output stream separation.
+1. First-connection probing, protocol precedence, and automatic routing.
+1. RouterOS native API shared transport plus v6/v7 dialects.
+1. RouterOS v7 REST protocol implementation.
+1. Integration tests using RouterOS CHR or dedicated test devices.
