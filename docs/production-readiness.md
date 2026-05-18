@@ -21,7 +21,7 @@
 | --- | --- | --- |
 | [#60 建立 RouterOS 真机/CHR 验收矩阵](https://github.com/AS153929/roswire/issues/60) | RouterOS v6/v7、API/API-SSL/REST、SSH/SFTP/SCP、导入/导出/备份工作流的验收记录 | 至少覆盖一套 v6 与一套 v7/CHR；失败项有结构化 issue 或明确降级说明 |
 | [#61 发布工程与安装文档](https://github.com/AS153929/roswire/issues/61) | GitHub Releases 流程、平台二进制、校验和、安装/升级/卸载文档 | release artifact 可下载、可校验、可在目标平台 smoke test 通过 |
-| [#62 多平台 keychain smoke 测试](https://github.com/AS153929/roswire/issues/62) | macOS Keychain、Linux Secret Service、Windows Credential Manager 的 smoke 记录 | 三个平台至少给出通过记录；不可用平台有明确结构化错误和文档化 fallback |
+| [#62 多平台 keychain smoke 测试](https://github.com/AS153929/roswire/issues/62) | macOS Keychain、Linux Secret Service、Windows Credential Manager 的 smoke/fallback 记录 | PR documented fallback 通过；发布前 macOS `workflow_dispatch` 原生 smoke 或本地 CI runner smoke 有记录 |
 
 ## 发布前必须满足的质量门
 
@@ -87,7 +87,7 @@ CI 与本地结果必须一致。若本地环境无法运行覆盖率或平台 s
 
 - [ ] #60 已关闭，真实设备/CHR 矩阵可追溯。
 - [ ] #61 已关闭，release artifact 可安装且可校验。
-- [ ] #62 已关闭，keychain 多平台 smoke 可追溯。
+- [x] #62 已关闭，keychain 多平台 smoke/fallback 可追溯。
 - [ ] README 不再包含过期“仅规划”措辞，示例与实现一致。
 - [ ] `docs/feature-checklist.md` 中生产级相关未完成项均有 issue 链接或已关闭。
 - [ ] 最近一次完整本地门禁与 CI 门禁均通过。
@@ -98,5 +98,5 @@ CI 与本地结果必须一致。若本地环境无法运行覆盖率或平台 s
 截至 2026-05-18：
 
 - MVP 功能闭环已经完成，可进入 Beta/实验室试用。
-- Production-stable 仍被 #60、#61、#62 阻塞。
+- Production-stable 仍被 #60、#61 阻塞；#62 的 keychain smoke/fallback 方案见 [`keychain-smoke.md`](keychain-smoke.md)。
 - 在这些 blocker 关闭前，README、Release note 和安装文档必须使用 “MVP/Beta” 表述，不得使用 “production-ready” 或 “stable” 表述。

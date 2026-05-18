@@ -92,7 +92,7 @@
 - [x] `--stdin` secret 输入
 - [x] secret inspect / config inspect 不泄露真实值
 - [x] 加密私钥 passphrase 非交互支持（`ROS_SSH_KEY_PASSPHRASE` / profile secret `ssh_key_passphrase`）
-- [ ] 多平台 keychain smoke test 矩阵
+- [x] 多平台 keychain smoke test 矩阵（#62：PR documented fallback，macOS 原生 smoke 走 workflow_dispatch/本地验证）
 
 ## RouterOS 命令映射
 
@@ -305,7 +305,7 @@
 - [x] 覆盖率门槛 85%
 - [ ] RouterOS CHR / 真机集成测试流水线
 - [ ] macOS / Linux / Windows 发布 smoke test
-- [ ] keychain 多平台 smoke test
+- [x] keychain 多平台 smoke test（#62）
 
 ## 文档与发布
 
@@ -337,7 +337,7 @@
 
 - #60 `M8: 建立 RouterOS 真机/CHR 验收矩阵`
 - #61 `M8: 发布工程与安装文档`
-- #62 `M8: 多平台 keychain smoke 测试`
+- #62 `M8: 多平台 keychain smoke 测试`（完成：`tests/keychain_smoke.rs` ignored smoke、CI `keychain-smoke` job、`docs/keychain-smoke.md` 平台依赖与 fallback）
 - #63 `M8: 定义生产级稳定版验收门槛`（完成：MVP/Beta/Production 边界、P0 blockers、质量门、发布物与安全门槛）
 - #64 `M7: 扩展远端 schema cache TTL/refresh 与菜单 overlay`（完成：hit/miss/stale/refresh 决策、`--refresh`、overlay enum 来源标记）
 - #65 `M7: 实现 SSH 服务 ensure/restore 与白名单合并`（完成：SSH service 快照、enable/address 合并、成功/失败 restore、`SSH_RESTORE_FAILED`）

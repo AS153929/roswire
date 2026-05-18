@@ -771,7 +771,7 @@ ssh2 = "0.9"
 - 认证失败、接口不存在、TLS 失败、REST 404/401 等错误路径。
 - SSH 文件传输后端：验证上传 `.rsc` 后导入、生成 `.backup` 后下载、白名单设置、服务恢复、大小限制、超时、覆盖策略和校验和失败路径。
 - SSH 凭据路径：密码复用、显式 SSH 凭据、key auth、host key 校验、加密私钥不支持路径都要有稳定错误。
-- 本机钥匙链：macOS Keychain、Linux Secret Service、Windows Credential Manager 至少各有 smoke test 或 documented fallback。
+- 本机钥匙链：macOS Keychain、Linux Secret Service、Windows Credential Manager 至少各有 smoke test 或 documented fallback；执行入口见 [`keychain-smoke.md`](keychain-smoke.md)。
 - Agent 远端诊断：`doctor --include-remote --json` 访问 RouterOS 时必须声明 selected protocol、routeros version、服务状态和脱敏错误。
 
 ### 发布验证

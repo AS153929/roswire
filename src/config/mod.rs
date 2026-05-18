@@ -1701,6 +1701,32 @@ retention_days = 7
         );
     }
 
+    #[derive(Debug)]
+    struct FakeKeychainBackendError;
+
+    impl std::fmt::Display for FakeKeychainBackendError {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("fake keychain unavailable")
+        }
+    }
+
+    impl std::error::Error for FakeKeychainBackendError {}
+
+    #[test]
+    fn keychain_backend_errors_are_structured() {
+        let unavailable = map_keychain_backend_error(keyring::Error::NoStorageAccess(Box::new(
+            FakeKeychainBackendError,
+        )));
+        assert!(has_error_code(
+            &unavailable,
+            ErrorCode::SecretBackendUnavailable
+        ));
+        assert!(unavailable.message.contains("keychain backend unavailable"));
+
+        let missing = map_keychain_read_error(keyring::Error::NoEntry);
+        assert!(has_error_code(&missing, ErrorCode::SecretNotFound));
+    }
+
     #[cfg(unix)]
     #[test]
     fn insecure_file_permissions_are_rejected() {

@@ -5,6 +5,7 @@ on:
     branches:
       - main
   pull_request:
+  workflow_dispatch:
 
 jobs:
   checks:
@@ -45,3 +46,78 @@ jobs:
 
       - name: Coverage gate (>=85%)
         run: cargo llvm-cov --workspace --all-features --fail-under-lines 85
+
+  keychain-smoke:
+    name: keychain-smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            mode: documented-fallback
+            test: documented_fallbacks_cover_linux_and_windows
+          - os: ubuntu-latest
+            mode: documented-fallback
+            test: documented_fallbacks_cover_linux_and_windows
+          - os: windows-latest
+            mode: documented-fallback
+            test: documented_fallbacks_cover_linux_and_windows
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: keychain-smoke-${{ matrix.os }}
+
+      - name: Prepare macOS CI keychain
+        if: matrix.os == 'macos-latest'
+        run: |
+          CI_KEYCHAIN="$RUNNER_TEMP/roswire-ci.keychain-db"
+          security create-keychain -p "" "$CI_KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$CI_KEYCHAIN"
+          security unlock-keychain -p "" "$CI_KEYCHAIN"
+          security list-keychains -d user -s "$CI_KEYCHAIN" "$HOME/Library/Keychains/login.keychain-db"
+          security default-keychain -s "$CI_KEYCHAIN"
+
+      - name: Run keychain smoke
+        env:
+          ROSWIRE_KEYCHAIN_SMOKE: ${{ matrix.mode }}
+        run: cargo test --test keychain_smoke ${{ matrix.test }} -- --ignored --exact
+
+  keychain-native-macos:
+    name: keychain-native-macos
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: keychain-native-macos
+
+      - name: Prepare macOS CI keychain
+        run: |
+          CI_KEYCHAIN="$RUNNER_TEMP/roswire-ci.keychain-db"
+          security create-keychain -p "" "$CI_KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$CI_KEYCHAIN"
+          security unlock-keychain -p "" "$CI_KEYCHAIN"
+          security list-keychains -d user -s "$CI_KEYCHAIN" "$HOME/Library/Keychains/login.keychain-db"
+          security default-keychain -s "$CI_KEYCHAIN"
+
+      - name: Run native macOS keychain smoke
+        env:
+          ROSWIRE_KEYCHAIN_SMOKE: native
+        run: cargo test --test keychain_smoke native_keychain_roundtrip_redacts_inspect_output -- --ignored --exact
