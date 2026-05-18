@@ -167,9 +167,13 @@ CHECKSUMS="$TMPDIR_ROSWIRE/checksums.txt"
 log "Installing roswire from $REPO ($VERSION)."
 log "Downloading $ASSET..."
 download "$BASE_URL/$ASSET" "$ARCHIVE"
-download "$BASE_URL/checksums.txt" "$CHECKSUMS"
 
-verify_checksum "$CHECKSUMS" "$ARCHIVE" "$ASSET"
+if [ "$VERIFY" = "0" ]; then
+  log "Skipping checksum verification because ROSWIRE_VERIFY=0."
+else
+  download "$BASE_URL/checksums.txt" "$CHECKSUMS"
+  verify_checksum "$CHECKSUMS" "$ARCHIVE" "$ASSET"
+fi
 
 case "$ASSET" in
   *.tar.gz)
