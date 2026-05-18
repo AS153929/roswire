@@ -1,5 +1,6 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
+use std::fs;
 
 #[test]
 fn file_upload_dry_run_writes_plan_to_stdout_only() {
@@ -33,9 +34,26 @@ fn file_upload_dry_run_writes_plan_to_stdout_only() {
 #[test]
 fn file_upload_dry_run_marks_encrypted_key_without_leaking_passphrase() {
     let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
+    let temp = tempfile::tempdir().expect("temp dir should be created");
     let passphrase = "SMOKE_KEY_PASSPHRASE_SECRET";
+    write_config(
+        temp.path(),
+        &format!(
+            r#"
+version = 1
+default_profile = "studio"
 
-    cmd.env("ROS_SSH_KEY_PASSPHRASE", passphrase)
+[profiles.studio]
+allow_plain_secrets = true
+
+[profiles.studio.secrets.ssh_key_passphrase]
+type = "plain"
+value = "{passphrase}"
+"#,
+        ),
+    );
+
+    cmd.env("ROSWIRE_HOME", temp.path())
         .args([
             "file",
             "upload",
@@ -62,6 +80,18 @@ fn file_upload_dry_run_marks_encrypted_key_without_leaking_passphrase() {
         ))
         .stdout(predicate::str::contains("***REDACTED***/id_ed25519"))
         .stdout(predicate::str::contains(passphrase).not());
+}
+
+fn write_config(home: &std::path::Path, contents: &str) {
+    fs::write(home.join("config.toml"), contents).expect("config should be written");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(home, fs::Permissions::from_mode(0o700))
+            .expect("home permissions should be set");
+        fs::set_permissions(home.join("config.toml"), fs::Permissions::from_mode(0o600))
+            .expect("config permissions should be set");
+    }
 }
 
 #[test]

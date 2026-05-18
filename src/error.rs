@@ -167,7 +167,7 @@ impl RosWireError {
             error_code: ErrorCode::SshHostKeyRequired,
             message: message.into(),
             hint: Some(
-                "set --ssh-host-key or ROS_SSH_HOST_KEY before using SSH transfer".to_owned(),
+                "set --ssh-host-key or profile ssh_host_key before using SSH transfer".to_owned(),
             ),
             context: ErrorContext::default(),
             exit_code: 2,
@@ -188,7 +188,7 @@ impl RosWireError {
         Self {
             error_code: ErrorCode::SshWhitelistRequired,
             message: message.into(),
-            hint: Some("set --allow-from or ROS_SSH_ALLOW_FROM to a narrow client CIDR".to_owned()),
+            hint: Some("set --allow-from or profile allow_from to a narrow client CIDR".to_owned()),
             context: ErrorContext::default(),
             exit_code: 2,
         }
@@ -253,7 +253,7 @@ impl RosWireError {
         Self {
             error_code: ErrorCode::ProfileNotFound,
             message: format!("profile not found: {profile}"),
-            hint: Some("set --profile, ROS_PROFILE, or default_profile".to_owned()),
+            hint: Some("set --profile or default_profile".to_owned()),
             context: ErrorContext::default(),
             exit_code: 2,
         }

@@ -35,24 +35,25 @@
 
 ## 全局参数与配置来源
 
-- [x] `--profile` / `ROS_PROFILE`
-- [x] `--host` / `ROS_HOST`
-- [x] `--user` / `ROS_USER`
-- [x] `--password` / `ROS_PASSWORD`
-- [x] `--protocol` / `ROS_PROTOCOL`
-- [x] `--routeros-version` / `ROS_ROUTEROS_VERSION`
-- [x] `--port` / `ROS_PORT`
-- [x] `--transfer` / `ROS_TRANSFER`
-- [x] `--ssh-port` / `ROS_SSH_PORT`
-- [x] `--ssh-user` / `ROS_SSH_USER`
-- [x] `--ssh-password` / `ROS_SSH_PASSWORD`
-- [x] `--ssh-key` / `ROS_SSH_KEY`
-- [x] `ROS_SSH_KEY_PASSPHRASE` / profile secret `ssh_key_passphrase`
-- [x] `--ssh-host-key` / `ROS_SSH_HOST_KEY`
-- [x] `--allow-from` / `ROS_SSH_ALLOW_FROM`
+- [x] `--profile` / `default_profile` / 单 profile 推导
+- [x] `--host` / profile `host`
+- [x] `--user` / profile `user`
+- [x] `--password` / profile secret `password`
+- [x] `--protocol` / profile `protocol`
+- [x] `--routeros-version` / profile `routeros_version`
+- [x] `--port` / profile `port`
+- [x] `--transfer` / profile `transfer`
+- [x] `--ssh-port` / profile `ssh_port`
+- [x] `--ssh-user` / profile `ssh_user`
+- [x] `--ssh-password` / profile secret `ssh_password`
+- [x] `--ssh-key` / profile `ssh_key`
+- [x] profile secret `ssh_key_passphrase`
+- [x] `--ssh-host-key` / profile `ssh_host_key`
+- [x] `--allow-from` / profile `allow_from`
 - [x] `--ensure-ssh`
 - [x] `--restore-ssh`
-- [x] 配置优先级：CLI 参数 > 环境变量 > profile > 默认值
+- [x] 配置优先级：CLI 参数 > profile > 默认值
+- [x] 移除设备级 `ROS_*` 环境变量入口，保留 `ROSWIRE_HOME` / `ROSWIRE_DEBUG` / secret 后端变量
 - [x] `auto` 协议下禁止单一 `--port` 覆盖
 
 ## 本地配置与 profile
@@ -71,7 +72,7 @@
 - [x] Unix/macOS config 权限目标 `0600`
 - [x] 配置权限过宽时返回结构化错误
 - [x] profile 不存在时返回 `PROFILE_NOT_FOUND`
-- [x] 未选择 profile 时按 CLI / env / default_profile / 单 profile 推导
+- [x] 未选择 profile 时按 CLI / default_profile / 单 profile 推导
 - [x] 拒绝把 MAC 地址作为 RouterOS `host`
 - [x] `config inspect` 输出 resolved 字段来源
 - [x] `config inspect` 输出 logging 配置
@@ -91,7 +92,7 @@
 - [x] same-as 循环检测
 - [x] `--stdin` secret 输入
 - [x] secret inspect / config inspect 不泄露真实值
-- [x] 加密私钥 passphrase 非交互支持（`ROS_SSH_KEY_PASSPHRASE` / profile secret `ssh_key_passphrase`）
+- [x] 加密私钥 passphrase 非交互支持（profile secret `ssh_key_passphrase`）
 - [x] 多平台 keychain smoke test 矩阵（#62：PR documented fallback，macOS 原生 smoke 走 workflow_dispatch/本地验证）
 
 ## RouterOS 命令映射
@@ -345,7 +346,8 @@
 - #64 `M7: 扩展远端 schema cache TTL/refresh 与菜单 overlay`（完成：hit/miss/stale/refresh 决策、`--refresh`、overlay enum 来源标记）
 - #65 `M7: 实现 SSH 服务 ensure/restore 与白名单合并`（完成：SSH service 快照、enable/address 合并、成功/失败 restore、`SSH_RESTORE_FAILED`）
 - #66 `M7: 增强文件工作流覆盖策略、超时与重试`（完成：`--if-exists`、transfer timeouts、有限 retry、dry-run policy）
-- #67 `M7: 实现 SCP fallback 与加密 SSH 私钥 passphrase 支持`（完成：SFTP subsystem 不可用时 SCP fallback、`ROS_SSH_KEY_PASSPHRASE` / profile secret `ssh_key_passphrase`、脱敏与 dry-run 标记；真机矩阵仍在 #60）
+- #67 `M7: 实现 SCP fallback 与加密 SSH 私钥 passphrase 支持`（完成：SFTP subsystem 不可用时 SCP fallback、profile secret `ssh_key_passphrase`、脱敏与 dry-run 标记；真实设备运行记录仍是 production-stable 门槛）
+- #90 `移除单设备 ROS_* 环境变量配置入口`（完成：设备/连接/传输字段优先级收敛为 CLI > profile > defaults，保留 `ROSWIRE_*` 全局/secret 后端变量）
 - #68 `M7: 实现 system script put 工作流`（完成：dry-run、UTF-8/大小校验、classic/REST 写入映射与脱敏）
 - #69 `M7: 实现 RouterOS raw command passthrough`（完成：显式 raw、classic words、只读/写安全边界、REST raw 不开放说明）
 - #70 `M7: 扩展 /ip/firewall 命令族`（完成：address-list/filter/nat print）

@@ -47,6 +47,8 @@ fn config_device_add_and_inspect_work() {
             "ssh_port=2222",
             "ssh_user=backup",
             "ssh_key=/Users/example/.ssh/id_ed25519",
+            "ssh_host_key=SHA256:test",
+            "allow_from=203.0.113.10/32,203.0.113.11/32",
             "--json",
         ],
     )
@@ -71,7 +73,11 @@ fn config_device_add_and_inspect_work() {
     .stdout(predicate::str::contains("\"ssh_user\""))
     .stdout(predicate::str::contains("backup"))
     .stdout(predicate::str::contains("***REDACTED***/id_ed25519"))
-    .stdout(predicate::str::contains("/Users/example/.ssh").not());
+    .stdout(predicate::str::contains("/Users/example/.ssh").not())
+    .stdout(predicate::str::contains("ssh_host_key"))
+    .stdout(predicate::str::contains("SHA256:test"))
+    .stdout(predicate::str::contains("allow_from"))
+    .stdout(predicate::str::contains("203.0.113.10/32,203.0.113.11/32"));
 }
 
 #[test]

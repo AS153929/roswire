@@ -432,23 +432,17 @@ fn resolve_execution_target_with_env(
         None
     };
 
-    let env_profile = env.get("ROS_PROFILE").map(String::as_str);
     let selected_profile = match &config_file {
         Some(config_file) => {
-            match config::select_active_profile(cli.profile.as_deref(), env_profile, config_file) {
+            match config::select_active_profile(cli.profile.as_deref(), config_file) {
                 Ok(profile) => Some(profile),
-                Err(error) if cli.profile.is_some() || env_profile.is_some() => return Err(error),
+                Err(error) if cli.profile.is_some() => return Err(error),
                 Err(_) => None,
             }
         }
         None if cli.profile.is_some() => {
             return Err(Box::new(error::RosWireError::profile_not_found(
                 cli.profile.clone().expect("profile is checked as Some"),
-            )));
-        }
-        None if env_profile.is_some() => {
-            return Err(Box::new(error::RosWireError::profile_not_found(
-                env_profile.expect("env profile is checked as Some"),
             )));
         }
         None => None,
@@ -463,40 +457,34 @@ fn resolve_execution_target_with_env(
     let host = cli
         .host
         .clone()
-        .or_else(|| env.get("ROS_HOST").cloned())
         .or_else(|| profile.and_then(|profile| profile.host.clone()))
         .ok_or_else(|| {
             Box::new(error::RosWireError::config(
-                "missing RouterOS host; set --host, ROS_HOST, or profile host",
+                "missing RouterOS host; set --host or profile host",
             ))
         })?;
     config::validate_remote_host(&host)?;
     let user = cli
         .user
         .clone()
-        .or_else(|| env.get("ROS_USER").cloned())
         .or_else(|| profile.and_then(|profile| profile.user.clone()))
         .ok_or_else(|| {
             Box::new(error::RosWireError::config(
-                "missing RouterOS user; set --user, ROS_USER, or profile user",
+                "missing RouterOS user; set --user or profile user",
             ))
         })?;
-    let password = match cli
-        .password
-        .clone()
-        .or_else(|| env.get("ROS_PASSWORD").cloned())
-    {
+    let password = match cli.password.clone() {
         Some(password) => password,
         None => match profile {
             Some(profile) => config::resolve_profile_secret_value(profile, "password", env)?
                 .ok_or_else(|| {
                     Box::new(error::RosWireError::config(
-                        "missing RouterOS password; set --password, ROS_PASSWORD, or profile secret password",
+                        "missing RouterOS password; set --password or profile secret password",
                     ))
                 })?,
             None => {
                 return Err(Box::new(error::RosWireError::config(
-                    "missing RouterOS password; set --password, ROS_PASSWORD, or profile secret password",
+                    "missing RouterOS password; set --password or profile secret password",
                 )));
             }
         },
@@ -505,7 +493,6 @@ fn resolve_execution_target_with_env(
     let requested_protocol = cli
         .protocol
         .map(|value| value.as_str().to_owned())
-        .or_else(|| env.get("ROS_PROTOCOL").cloned())
         .or_else(|| profile.and_then(|profile| profile.protocol.clone()))
         .unwrap_or_else(|| "auto".to_owned());
     validate_protocol(&requested_protocol)?;
@@ -513,18 +500,12 @@ fn resolve_execution_target_with_env(
     let routeros_version = cli
         .routeros_version
         .map(|value| value.as_str().to_owned())
-        .or_else(|| env.get("ROS_ROUTEROS_VERSION").cloned())
         .or_else(|| profile.and_then(|profile| profile.routeros_version.clone()))
         .unwrap_or_else(|| "auto".to_owned());
     validate_routeros_version(&routeros_version)?;
 
-    let env_port = match env.get("ROS_PORT") {
-        Some(value) => Some(parse_port(value)?),
-        None => None,
-    };
     let explicit_port = cli
         .port
-        .or(env_port)
         .or_else(|| profile.and_then(|profile| profile.port));
     let port = explicit_port.unwrap_or_else(|| default_port(&requested_protocol));
 
@@ -562,6 +543,7 @@ fn validate_routeros_version(value: &str) -> RosWireResult<()> {
     }
 }
 
+#[cfg(test)]
 fn parse_port(value: &str) -> RosWireResult<u16> {
     value.parse::<u16>().map_err(|error| {
         Box::new(error::RosWireError::usage(format!(
@@ -659,7 +641,7 @@ mod tests {
     }
 
     #[test]
-    fn execution_target_uses_env_over_profile() {
+    fn execution_target_ignores_ros_env_and_uses_profile() {
         let (temp, env_home) = temp_home_env();
         write_config(
             temp.path(),
@@ -691,12 +673,12 @@ value = "profile-value"
 
         let target = resolve_execution_target_with_env(&cli, &env).expect("target should resolve");
 
-        assert_eq!(target.host, "203.0.113.9");
-        assert_eq!(target.user, "env-user");
-        assert_eq!(target.password, "env-value");
-        assert_eq!(target.requested_protocol, "api-ssl");
-        assert_eq!(target.routeros_version, "v7");
-        assert_eq!(target.port, 8729);
+        assert_eq!(target.host, "198.51.100.10");
+        assert_eq!(target.user, "profile-user");
+        assert_eq!(target.password, "profile-value");
+        assert_eq!(target.requested_protocol, "api");
+        assert_eq!(target.routeros_version, "v6");
+        assert_eq!(target.port, 8728);
     }
 
     #[test]

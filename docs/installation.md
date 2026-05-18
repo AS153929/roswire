@@ -96,15 +96,20 @@ cargo build --release --locked
 
 ## 最小配置示例
 
-建议优先使用环境变量或 profile secret，避免把密码放进 shell history。
+设备、连接和传输字段建议写入 profile；secret 只保存引用。`ROS_*` 单设备环境变量入口已移除，避免多设备场景误连。
 
 ```bash
-export ROS_HOST="192.168.88.1"
-export ROS_USER="admin"
-export ROS_PASSWORD="replace-with-secret"
-export ROS_PROTOCOL="auto"
-export ROS_TRANSFER="ssh"
-export ROS_SSH_HOST_KEY="SHA256:replace-with-routeros-host-key"
+export ROSWIRE_STUDIO_PASSWORD="replace-with-secret"
+roswire config init --json
+roswire config device add studio \
+  host=192.168.88.1 \
+  user=admin \
+  protocol=auto \
+  transfer=ssh \
+  ssh_host_key=SHA256:replace-with-routeros-host-key \
+  allow_from=203.0.113.10/32 \
+  --json
+roswire config secret set studio password type=env env=ROSWIRE_STUDIO_PASSWORD --json
 ```
 
 随后可以运行只读命令：
@@ -113,10 +118,11 @@ export ROS_SSH_HOST_KEY="SHA256:replace-with-routeros-host-key"
 roswire interface print --json
 ```
 
-文件传输需要 SSH host key 指纹；如果要临时确保 SSH 服务开启，应显式提供窄白名单：
+文件传输需要 SSH host key 指纹；如果 profile 已设置 `ssh_host_key` 和 `allow_from`，dry-run 可以直接读取 profile。也可以用命令行参数临时覆盖：
 
 ```bash
-roswire file upload ./setup.rsc flash/setup.rsc --dry-run --ssh-host-key "$ROS_SSH_HOST_KEY" --allow-from 203.0.113.10/32 --json
+roswire file upload ./setup.rsc flash/setup.rsc --dry-run --json
+roswire file upload ./setup.rsc flash/setup.rsc --dry-run --ssh-host-key SHA256:replace-with-routeros-host-key --allow-from 203.0.113.10/32 --json
 ```
 
 ## 平台依赖提示

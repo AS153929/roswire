@@ -77,6 +77,9 @@ pub struct ProfileConfig {
     pub ssh_port: Option<u16>,
     pub ssh_user: Option<String>,
     pub ssh_key: Option<String>,
+    pub ssh_host_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow_from: Vec<String>,
     #[serde(default)]
     pub allow_plain_secrets: bool,
     #[serde(default)]
@@ -197,7 +200,7 @@ pub fn validate_remote_host(host: &str) -> RosWireResult<()> {
                 "RouterOS host must be an IP address or DNS name, not a MAC address: {host}"
             ))
             .with_hint(
-                "set host/ROS_HOST/--host to a routable IP address or DNS name; MAC-based Layer 2 discovery is not supported by this CLI",
+                "set profile host or --host to a routable IP address or DNS name; MAC-based Layer 2 discovery is not supported by this CLI",
             )
             .with_context(ErrorContext {
                 host: host.to_owned(),
@@ -224,12 +227,10 @@ fn is_separated_mac_address(value: &str, separator: char) -> bool {
 
 pub fn select_active_profile(
     cli_profile: Option<&str>,
-    env_profile: Option<&str>,
     config: &ConfigFile,
 ) -> RosWireResult<String> {
     let selected = cli_profile
         .map(str::to_owned)
-        .or_else(|| env_profile.map(str::to_owned))
         .or_else(|| config.default_profile.clone())
         .or_else(|| {
             if config.profiles.len() == 1 {
@@ -240,7 +241,7 @@ pub fn select_active_profile(
         })
         .ok_or_else(|| {
             Box::new(RosWireError::config(
-                "no profile selected; set --profile, ROS_PROFILE, or default_profile",
+                "no profile selected; set --profile or default_profile",
             ))
         })?;
 
@@ -540,15 +541,11 @@ fn derive_encryption_key(master_key: &str) -> [u8; 32] {
 
 pub fn inspect_config(
     cli: &Cli,
-    env: &BTreeMap<String, String>,
+    _env: &BTreeMap<String, String>,
     config: &ConfigFile,
     paths: &ConfigPaths,
 ) -> RosWireResult<ConfigInspect> {
-    let active_profile = select_active_profile(
-        cli.profile.as_deref(),
-        env.get("ROS_PROFILE").map(String::as_str),
-        config,
-    )?;
+    let active_profile = select_active_profile(cli.profile.as_deref(), config)?;
     let profile = config
         .profiles
         .get(&active_profile)
@@ -560,7 +557,6 @@ pub fn inspect_config(
         &mut resolved,
         "host",
         cli.host.as_deref(),
-        env.get("ROS_HOST").map(String::as_str),
         profile.host.as_deref(),
         None,
     );
@@ -568,7 +564,6 @@ pub fn inspect_config(
         &mut resolved,
         "user",
         cli.user.as_deref(),
-        env.get("ROS_USER").map(String::as_str),
         profile.user.as_deref(),
         None,
     );
@@ -576,7 +571,6 @@ pub fn inspect_config(
         &mut resolved,
         "protocol",
         cli.protocol.map(|value| value.as_str()),
-        env.get("ROS_PROTOCOL").map(String::as_str),
         profile.protocol.as_deref(),
         Some("auto"),
     );
@@ -584,7 +578,6 @@ pub fn inspect_config(
         &mut resolved,
         "routeros_version",
         cli.routeros_version.map(|value| value.as_str()),
-        env.get("ROS_ROUTEROS_VERSION").map(String::as_str),
         profile.routeros_version.as_deref(),
         Some("auto"),
     );
@@ -592,7 +585,6 @@ pub fn inspect_config(
         &mut resolved,
         "transfer",
         cli.transfer.map(|value| value.as_str()),
-        env.get("ROS_TRANSFER").map(String::as_str),
         profile.transfer.as_deref(),
         Some("ssh"),
     );
@@ -603,7 +595,6 @@ pub fn inspect_config(
         &mut resolved,
         "port",
         port_cli.as_deref(),
-        env.get("ROS_PORT").map(String::as_str),
         port_profile.as_deref(),
         None,
     );
@@ -614,7 +605,6 @@ pub fn inspect_config(
         &mut resolved,
         "ssh_port",
         ssh_port_cli.as_deref(),
-        env.get("ROS_SSH_PORT").map(String::as_str),
         ssh_port_profile.as_deref(),
         Some("22"),
     );
@@ -622,15 +612,10 @@ pub fn inspect_config(
         &mut resolved,
         "ssh_user",
         cli.ssh_user.as_deref(),
-        env.get("ROS_SSH_USER").map(String::as_str),
         profile.ssh_user.as_deref(),
         None,
     );
     let ssh_key_cli = cli.ssh_key.as_deref().map(redact_local_path_for_inspect);
-    let ssh_key_env = env
-        .get("ROS_SSH_KEY")
-        .map(String::as_str)
-        .map(redact_local_path_for_inspect);
     let ssh_key_profile = profile
         .ssh_key
         .as_deref()
@@ -639,8 +624,23 @@ pub fn inspect_config(
         &mut resolved,
         "ssh_key",
         ssh_key_cli.as_deref(),
-        ssh_key_env.as_deref(),
         ssh_key_profile.as_deref(),
+        None,
+    );
+    insert_resolved_field(
+        &mut resolved,
+        "ssh_host_key",
+        cli.ssh_host_key.as_deref(),
+        profile.ssh_host_key.as_deref(),
+        None,
+    );
+    let allow_from_cli = (!cli.allow_from.is_empty()).then(|| cli.allow_from.join(","));
+    let allow_from_profile = (!profile.allow_from.is_empty()).then(|| profile.allow_from.join(","));
+    insert_resolved_field(
+        &mut resolved,
+        "allow_from",
+        allow_from_cli.as_deref(),
+        allow_from_profile.as_deref(),
         None,
     );
 
@@ -663,13 +663,11 @@ fn insert_resolved_field(
     resolved: &mut BTreeMap<String, ResolvedField>,
     name: &str,
     cli_value: Option<&str>,
-    env_value: Option<&str>,
     profile_value: Option<&str>,
     default_value: Option<&str>,
 ) {
     let candidate = cli_value
         .map(|value| (value.to_owned(), ValueSource::Cli))
-        .or_else(|| env_value.map(|value| (value.to_owned(), ValueSource::Env)))
         .or_else(|| profile_value.map(|value| (value.to_owned(), ValueSource::Profile)))
         .or_else(|| default_value.map(|value| (value.to_owned(), ValueSource::Default)));
 
@@ -898,6 +896,14 @@ fn handle_config_device(tokens: &[String]) -> RosWireResult<String> {
                 profile.ssh_key = Some(value);
                 updated_fields.push("ssh_key".to_owned());
             }
+            "ssh_host_key" | "ssh-host-key" => {
+                profile.ssh_host_key = Some(value);
+                updated_fields.push("ssh_host_key".to_owned());
+            }
+            "allow_from" | "allow-from" => {
+                profile.allow_from = parse_allow_from_list(&value)?;
+                updated_fields.push("allow_from".to_owned());
+            }
             _ => {
                 return Err(Box::new(RosWireError::usage(format!(
                     "unsupported device field: {key}",
@@ -1107,6 +1113,21 @@ fn parse_key_value_tokens(tokens: &[String]) -> RosWireResult<BTreeMap<String, S
     }
 
     Ok(key_values)
+}
+
+fn parse_allow_from_list(value: &str) -> RosWireResult<Vec<String>> {
+    let cidrs = value
+        .split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if cidrs.is_empty() {
+        return Err(Box::new(RosWireError::usage(
+            "allow_from requires at least one CIDR",
+        )));
+    }
+    Ok(cidrs)
 }
 
 fn take_secret_input(
@@ -1331,7 +1352,7 @@ retention_days = 7
     }
 
     #[test]
-    fn select_profile_uses_cli_then_env_then_default() {
+    fn select_profile_uses_cli_then_default() {
         let config = ConfigFile {
             version: 1,
             default_profile: Some("home".to_owned()),
@@ -1342,16 +1363,11 @@ retention_days = 7
             logging: LoggingConfig::default(),
         };
 
-        let selected = select_active_profile(Some("office"), Some("home"), &config)
-            .expect("cli profile should win");
+        let selected =
+            select_active_profile(Some("office"), &config).expect("cli profile should win");
         assert_eq!(selected, "office");
 
-        let selected =
-            select_active_profile(None, Some("home"), &config).expect("env profile should win");
-        assert_eq!(selected, "home");
-
-        let selected =
-            select_active_profile(None, None, &config).expect("default profile should apply");
+        let selected = select_active_profile(None, &config).expect("default profile should apply");
         assert_eq!(selected, "home");
     }
 
@@ -1385,7 +1401,7 @@ retention_days = 7
             logging: LoggingConfig::default(),
         };
 
-        let error = select_active_profile(Some("missing"), None, &config)
+        let error = select_active_profile(Some("missing"), &config)
             .expect_err("missing profile should fail");
         assert!(has_error_code(&error, ErrorCode::ProfileNotFound));
     }
@@ -1416,6 +1432,8 @@ retention_days = 7
                     routeros_version: Some("v7".to_owned()),
                     transfer: Some("ssh".to_owned()),
                     port: Some(8728),
+                    ssh_host_key: Some("SHA256:profile".to_owned()),
+                    allow_from: vec!["203.0.113.10/32".to_owned()],
                     ..ProfileConfig::default()
                 },
             )]),
@@ -1442,8 +1460,8 @@ retention_days = 7
         assert_eq!(
             inspect.resolved.get("user"),
             Some(&ResolvedField {
-                value: "env-user".to_owned(),
-                source: ValueSource::Env,
+                value: "profile-user".to_owned(),
+                source: ValueSource::Profile,
             })
         );
         assert_eq!(
@@ -1457,6 +1475,20 @@ retention_days = 7
             inspect.resolved.get("routeros_version"),
             Some(&ResolvedField {
                 value: "v7".to_owned(),
+                source: ValueSource::Profile,
+            })
+        );
+        assert_eq!(
+            inspect.resolved.get("ssh_host_key"),
+            Some(&ResolvedField {
+                value: "SHA256:profile".to_owned(),
+                source: ValueSource::Profile,
+            })
+        );
+        assert_eq!(
+            inspect.resolved.get("allow_from"),
+            Some(&ResolvedField {
+                value: "203.0.113.10/32".to_owned(),
                 source: ValueSource::Profile,
             })
         );

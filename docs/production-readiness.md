@@ -50,7 +50,7 @@ CI 与本地结果必须一致。若本地环境无法运行覆盖率或平台 s
 ### 文件与 SSH
 
 - SSH host key 必填与 mismatch 路径。
-- Password auth、key auth、加密 key passphrase（`ROS_SSH_KEY_PASSPHRASE` / profile secret）。
+- Password auth、key auth、加密 key passphrase（profile secret `ssh_key_passphrase`）。
 - SFTP 可用时使用 SFTP；SFTP subsystem 不可用时 SCP fallback；两者都不可用时返回明确 `FILE_TRANSFER_FAILED`。
 - `file upload` / `file download`、`import`、`export download`、`backup download` 的端到端路径。
 - 覆盖策略、超时、有限 retry、`.part` finalize、cleanup 失败路径。
