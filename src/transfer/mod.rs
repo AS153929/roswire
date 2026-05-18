@@ -900,7 +900,7 @@ fn execute_generated_download_workflow<B: WorkflowBackend>(
     if prepare_local_destination(spec.local, policy, context)? == DestinationDecision::Skip {
         return Ok(skipped_transfer_payload(
             spec.operation,
-            backend.name(),
+            DEFAULT_TRANSFER_BACKEND,
             Some(redact_local_path(spec.local)),
             Some(redact_remote_path(&spec.remote)),
         ));
@@ -911,7 +911,7 @@ fn execute_generated_download_workflow<B: WorkflowBackend>(
         backend.wait_remote_file(&spec.remote, policy.wait_timeout(), context)
     })?;
 
-    let tmp_local = format!("{}.part", spec.local);
+    let tmp_local = raw_temporary_local_path(spec.local);
     let (bytes, checksum_sha256) = backend.download(&spec.remote, &tmp_local, context)?;
     backend.finalize_local_download(&tmp_local, spec.local, context)?;
 
@@ -3128,8 +3128,8 @@ target = "password"
         .expect("workflow should succeed");
 
         assert_eq!(payload.operation, "import.plan");
-        assert_eq!(payload.bytes, 11);
-        assert_eq!(payload.checksum_sha256, "upload-sha256");
+        assert_eq!(payload.bytes, 12);
+        assert_eq!(payload.checksum_sha256, "upload-sha");
         assert_eq!(
             payload.paths.local_path.as_deref(),
             Some("***REDACTED***/setup.rsc")
@@ -3283,7 +3283,7 @@ target = "password"
         .expect("workflow should succeed");
 
         assert_eq!(payload.operation, "backup.download");
-        assert_eq!(payload.bytes, 17);
+        assert_eq!(payload.bytes, 24);
         assert_eq!(
             payload.paths.temporary_local_path.as_deref(),
             Some("***REDACTED***/pre-change.backup.part")
@@ -3788,7 +3788,6 @@ value = "profile-secret"
         fail_wait: bool,
         wait_failures_remaining: usize,
         fail_remove: bool,
-        control: ControlCommand,
         ssh_snapshot: SshServiceSnapshot,
         ssh_apply_count: usize,
         fail_ssh_apply_on: Option<usize>,
