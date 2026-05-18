@@ -9,7 +9,7 @@
 
 与面向人类交互的传统 CLI 不同，`roswire` 不输出颜色、加载动画（spinner）、分页器（pager），也不做交互式提问。它的契约很简单：成功结果写入 `stdout`，结构化错误和诊断信息写入 `stderr`。
 
-> **项目状态：** 当前处于早期设计与实现规划阶段。下面的示例描述的是目标 CLI 契约；具体实现计划见 [`docs/develop-plan.md`](docs/develop-plan.md)。
+> **项目状态：** 当前为 MVP / Beta 候选。核心 JSON-first CLI、配置、协议路由、自描述、SSH 文件传输与文件工作流已经闭环；生产级稳定版仍受真机/CHR 矩阵、发布工程和多平台 keychain smoke 测试阻塞。生产级门槛见 [`docs/production-readiness.md`](docs/production-readiness.md)，开发计划见 [`docs/develop-plan.md`](docs/develop-plan.md)。
 
 ## 核心特性
 
@@ -141,6 +141,7 @@ roswire ip address remove .id=*1 --json
 | `ROS_SSH_USER` | SSH 文件传输用户名；默认复用 `ROS_USER` |
 | `ROS_SSH_PASSWORD` | SSH 文件传输密码；默认复用 `ROS_PASSWORD` |
 | `ROS_SSH_KEY` | SSH 私钥路径；设置后优先使用 key auth |
+| `ROS_SSH_KEY_PASSPHRASE` | 加密 SSH 私钥 passphrase；也可用 profile secret `ssh_key_passphrase` 非交互提供 |
 | `ROS_SSH_HOST_KEY` | RouterOS SSH host key 指纹，用于非交互校验服务器身份 |
 | `ROS_SSH_ALLOW_FROM` | 需要写入 `/ip service ssh address` 的客户端来源白名单 CIDR |
 | `ROS_PORT` | 显式协议的可选端口覆盖；`auto` 模式不接受单一端口覆盖 |

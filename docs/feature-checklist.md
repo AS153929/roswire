@@ -19,6 +19,7 @@
 - [ ] 生产级真机矩阵验证
 - [ ] 更大范围 RouterOS 命令覆盖
 - [ ] 发布打包与安装说明
+- [x] 生产级稳定版验收门槛定义（#63）
 
 ## CLI 与输出契约
 
@@ -311,6 +312,7 @@
 - [x] `README.md` 基础说明
 - [x] `docs/develop-plan.md` 开发规格与阶段计划
 - [x] `docs/feature-checklist.md` 功能完成度 checklist
+- [x] `docs/production-readiness.md` 生产级稳定版验收门槛（#63）
 - [ ] README 与当前实现的完整示例校正
 - [ ] 安装说明
 - [ ] GitHub Releases 发布流程
@@ -336,7 +338,7 @@
 - #60 `M8: 建立 RouterOS 真机/CHR 验收矩阵`
 - #61 `M8: 发布工程与安装文档`
 - #62 `M8: 多平台 keychain smoke 测试`
-- #63 `M8: 定义生产级稳定版验收门槛`
+- #63 `M8: 定义生产级稳定版验收门槛`（完成：MVP/Beta/Production 边界、P0 blockers、质量门、发布物与安全门槛）
 - #64 `M7: 扩展远端 schema cache TTL/refresh 与菜单 overlay`（完成：hit/miss/stale/refresh 决策、`--refresh`、overlay enum 来源标记）
 - #65 `M7: 实现 SSH 服务 ensure/restore 与白名单合并`（完成：SSH service 快照、enable/address 合并、成功/失败 restore、`SSH_RESTORE_FAILED`）
 - #66 `M7: 增强文件工作流覆盖策略、超时与重试`（完成：`--if-exists`、transfer timeouts、有限 retry、dry-run policy）

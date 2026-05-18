@@ -78,6 +78,7 @@ roswire ip address remove .id=*1 --json
 | `--ssh-user <user>` | `ROS_SSH_USER` | SSH 文件传输用户名；默认复用 `ROS_USER` |
 | `--ssh-password <password>` | `ROS_SSH_PASSWORD` | SSH 文件传输密码；默认复用 `ROS_PASSWORD` |
 | `--ssh-key <path>` | `ROS_SSH_KEY` | SSH 私钥路径；设置后优先使用 key auth |
+| - | `ROS_SSH_KEY_PASSPHRASE` | 加密 SSH 私钥 passphrase；也可通过 profile secret `ssh_key_passphrase` 提供 |
 | `--ssh-host-key <fingerprint>` | `ROS_SSH_HOST_KEY` | RouterOS SSH host key 指纹；用于非交互校验服务器身份 |
 | `--allow-from <cidr>` | `ROS_SSH_ALLOW_FROM` | 允许访问 SSH 服务的客户端来源 CIDR，用于 `/ip service ssh address` |
 | `--ensure-ssh` | - | 允许 `roswire` 通过 API/REST 启用 SSH 服务并设置白名单 |
@@ -545,7 +546,7 @@ SSH 认证规则：
 
 - 默认复用 `ROS_USER` / `ROS_PASSWORD` 作为 SSH 登录凭据，减少重复配置。
 - 如果提供 `--ssh-user`、`--ssh-password` 或 `--ssh-key`，则 SSH transfer 使用显式 SSH 凭据，不影响 API/REST 控制面登录。
-- 设置 `--ssh-key` 时优先使用 key auth；私钥 passphrase 不得交互式询问，必须通过后续安全机制设计，MVP 阶段可先不支持加密私钥。
+- 设置 `--ssh-key` 时优先使用 key auth；加密私钥 passphrase 不得交互式询问，必须通过 `ROS_SSH_KEY_PASSPHRASE` 或 profile secret `ssh_key_passphrase` 非交互提供。
 - SSH host key 必须非交互校验。MVP 阶段要求用户通过 `--ssh-host-key` 或 `ROS_SSH_HOST_KEY` 提供期望指纹；未知或不匹配时失败。
 - 所有 SSH 凭据都属于敏感信息，不能进入错误上下文、debug 日志、dry-run 输出或 shell 建议命令。
 
@@ -792,7 +793,7 @@ ssh2 = "0.9"
 | M5 | REST API | 实现 v7 REST 映射、HTTP 状态码归一化和 JSON 解析 |
 | M6 | 动态 schema 与 SSH 文件传输 | 实现远端 schema 覆盖、缓存、SSH 服务准备、白名单合并/恢复、上传下载和文件工作流编排 |
 | M7 | 测试与文档 | 完成单元测试、集成测试、README 示例校正 |
-| M8 | 发布 | GitHub Releases、校验和、基础安装说明 |
+| M8 | 发布与生产级门槛 | GitHub Releases、校验和、基础安装说明、[`production-readiness.md`](production-readiness.md) 中的 P0 blocker 关闭 |
 
 ## 10. Agent 自愈闭环
 
