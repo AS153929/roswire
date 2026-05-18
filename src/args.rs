@@ -51,6 +51,23 @@ impl TransferMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum TransferIfExists {
+    Overwrite,
+    Skip,
+    Fail,
+}
+
+impl TransferIfExists {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Overwrite => "overwrite",
+            Self::Skip => "skip",
+            Self::Fail => "fail",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedInvocation {
     pub path: Vec<String>,
@@ -150,6 +167,34 @@ pub struct Cli {
     #[arg(long = "restore-ssh")]
     pub restore_ssh: bool,
 
+    /// Policy when transfer destination already exists.
+    #[arg(long = "if-exists", value_enum, default_value_t = TransferIfExists::Overwrite)]
+    pub if_exists: TransferIfExists,
+
+    /// SSH/API connection timeout in seconds for transfer workflows.
+    #[arg(long = "connect-timeout-seconds")]
+    pub connect_timeout_seconds: Option<u64>,
+
+    /// Timeout in seconds while waiting for RouterOS-generated workflow files.
+    #[arg(long = "wait-timeout-seconds")]
+    pub wait_timeout_seconds: Option<u64>,
+
+    /// Socket read/write timeout in seconds for transfer data plane.
+    #[arg(long = "transfer-timeout-seconds")]
+    pub transfer_timeout_seconds: Option<u64>,
+
+    /// Cleanup operation timeout in seconds for transfer workflows.
+    #[arg(long = "cleanup-timeout-seconds")]
+    pub cleanup_timeout_seconds: Option<u64>,
+
+    /// Maximum retry count for retryable transfer workflow steps.
+    #[arg(long, default_value_t = 0)]
+    pub retries: u8,
+
+    /// Delay in seconds between retry attempts.
+    #[arg(long = "retry-delay-seconds", default_value_t = 0)]
+    pub retry_delay_seconds: u64,
+
     /// Allow explicit raw RouterOS passthrough commands that may mutate state.
     #[arg(long = "allow-write")]
     pub allow_write: bool,
@@ -234,7 +279,7 @@ pub fn parse_invocation(tokens: &[String]) -> RosWireResult<ParsedInvocation> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_invocation, Cli, ProtocolMode};
+    use super::{parse_invocation, Cli, ProtocolMode, TransferIfExists};
     use clap::Parser;
 
     #[test]
@@ -346,6 +391,20 @@ mod tests {
             "203.0.113.10/32",
             "--ensure-ssh",
             "--restore-ssh",
+            "--if-exists",
+            "skip",
+            "--connect-timeout-seconds",
+            "5",
+            "--wait-timeout-seconds",
+            "6",
+            "--transfer-timeout-seconds",
+            "7",
+            "--cleanup-timeout-seconds",
+            "8",
+            "--retries",
+            "2",
+            "--retry-delay-seconds",
+            "1",
             "--cleanup",
         ])
         .expect("transfer flags should parse");
@@ -362,6 +421,13 @@ mod tests {
         assert_eq!(cli.allow_from, vec!["203.0.113.10/32"]);
         assert!(cli.ensure_ssh);
         assert!(cli.restore_ssh);
+        assert_eq!(cli.if_exists, TransferIfExists::Skip);
+        assert_eq!(cli.connect_timeout_seconds, Some(5));
+        assert_eq!(cli.wait_timeout_seconds, Some(6));
+        assert_eq!(cli.transfer_timeout_seconds, Some(7));
+        assert_eq!(cli.cleanup_timeout_seconds, Some(8));
+        assert_eq!(cli.retries, 2);
+        assert_eq!(cli.retry_delay_seconds, 1);
         assert!(cli.cleanup);
         assert_eq!(
             cli.tokens,
