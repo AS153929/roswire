@@ -672,7 +672,7 @@ fn catalog() -> Vec<CommandDefinition> {
             name: "config device add".to_owned(),
             summary: "Create a profile/device entry in config.toml.".to_owned(),
             kind: "config".to_owned(),
-            syntax: "roswire config device add <profile> host=<host> user=<user> [protocol=<mode>] [transfer=<mode>] [port=<n>] --json".to_owned(),
+            syntax: "roswire config device add <profile> host=<host> user=<user> [protocol=<mode>] [transfer=<mode>] [port=<n>] [ssh_host_key=<fingerprint>] [allow_from=<cidr>[,<cidr>...]] --json".to_owned(),
             arguments: vec![
                 ArgumentSpec {
                     name: "profile".to_owned(),
@@ -700,7 +700,7 @@ fn catalog() -> Vec<CommandDefinition> {
                 },
             ],
             examples: vec![
-                "roswire config device add studio-router host=10.189.189.1 user=master --json".to_owned(),
+                "roswire config device add studio-router host=10.189.189.1 user=master ssh_host_key=SHA256:abc allow_from=203.0.113.10/32 --json".to_owned(),
             ],
             errors: vec!["USAGE_ERROR".to_owned(), "CONFIG_ERROR".to_owned()],
         },
@@ -708,7 +708,7 @@ fn catalog() -> Vec<CommandDefinition> {
             name: "config device set".to_owned(),
             summary: "Update an existing profile/device entry in config.toml.".to_owned(),
             kind: "config".to_owned(),
-            syntax: "roswire config device set <profile> [host=<host>] [user=<user>] [protocol=<mode>] [transfer=<mode>] [port=<n>] --json".to_owned(),
+            syntax: "roswire config device set <profile> [host=<host>] [user=<user>] [protocol=<mode>] [transfer=<mode>] [port=<n>] [ssh_host_key=<fingerprint>] [allow_from=<cidr>[,<cidr>...]] --json".to_owned(),
             arguments: vec![ArgumentSpec {
                 name: "profile".to_owned(),
                 style: "positional".to_owned(),
@@ -757,7 +757,7 @@ fn catalog() -> Vec<CommandDefinition> {
                 "roswire config secret set studio-router password type=plain value=All.007! --json".to_owned(),
                 "roswire config secret set studio-router password type=keychain service=roswire account=profiles/studio-router/password --json".to_owned(),
                 "roswire config secret set studio-router ssh_password type=same-as target=password --json".to_owned(),
-                "roswire config secret set studio-router ssh_key_passphrase type=env var=ROS_SSH_KEY_PASSPHRASE --json".to_owned(),
+                "roswire config secret set studio-router ssh_key_passphrase type=env var=ROSWIRE_STUDIO_SSH_KEY_PASSPHRASE --json".to_owned(),
             ],
             errors: vec![
                 "USAGE_ERROR".to_owned(),

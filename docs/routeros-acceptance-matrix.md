@@ -19,30 +19,39 @@ Issue #60 不能只靠本地单元测试完成，必须准备真实 RouterOS/CHR
 
 建议使用可重置的 CHR/lab 设备，避免在生产路由器上直接运行 live 文件工作流。
 
-## 凭据与环境变量
+## Profile、凭据与 harness 变量
 
-所有 secret 都必须通过环境变量或 profile secret 提供，不要写进脚本参数或 shell history。
+设备、连接和传输字段必须通过 profile 或命令行参数提供；`ROS_*` 单设备环境变量入口已移除。所有 secret 都必须通过 profile secret（plain/encrypted/keychain/env/same-as）提供，不要写进脚本参数或 shell history。
 
-最小环境变量示例：
+最小 profile 示例：
 
 ```bash
-export ROS_HOST="198.51.100.10"
-export ROS_USER="roswire-ci"
-export ROS_PASSWORD="replace-with-secret"
-export ROS_PROTOCOL="auto"
-export ROS_ROUTEROS_VERSION="auto"
-export ROS_TRANSFER="ssh"
-export ROS_SSH_HOST_KEY="SHA256:replace-with-routeros-host-key"
-export ROS_SSH_ALLOW_FROM="203.0.113.10/32"
+export ROSWIRE_ACCEPTANCE_PASSWORD="replace-with-secret"
+roswire config init --json
+roswire config device add routeros-v7 \
+  host=198.51.100.10 \
+  user=roswire-ci \
+  protocol=auto \
+  routeros_version=auto \
+  transfer=ssh \
+  ssh_host_key=SHA256:replace-with-routeros-host-key \
+  allow_from=203.0.113.10/32 \
+  --json
+roswire config secret set routeros-v7 password type=env env=ROSWIRE_ACCEPTANCE_PASSWORD --json
 ```
 
 如使用 SSH key：
 
 ```bash
-export ROS_SSH_USER="roswire-ssh"
-export ROS_SSH_KEY="$HOME/.ssh/roswire_acceptance_ed25519"
-export ROS_SSH_KEY_PASSPHRASE="replace-with-passphrase-if-needed"
+export ROSWIRE_ACCEPTANCE_KEY_PASSPHRASE="replace-with-passphrase-if-needed"
+roswire config device set routeros-v7 \
+  ssh_user=roswire-ssh \
+  ssh_key="$HOME/.ssh/roswire_acceptance_ed25519" \
+  --json
+roswire config secret set routeros-v7 ssh_key_passphrase type=env env=ROSWIRE_ACCEPTANCE_KEY_PASSPHRASE --json
 ```
+
+Harness 自身只读取 `ROSWIRE_ACCEPTANCE_*` 控制变量。若不想把 `ssh_host_key` / `allow_from` 写入 profile，可用 `ROSWIRE_ACCEPTANCE_SSH_HOST_KEY` 和 `ROSWIRE_ACCEPTANCE_ALLOW_FROM` 作为脚本运行时 CLI 覆盖；若已写入 profile 且希望运行 transfer dry-run case，设置 `ROSWIRE_ACCEPTANCE_RUN_TRANSFER_DRY_RUN=1`。
 
 ## Harness
 
@@ -51,6 +60,8 @@ export ROS_SSH_KEY_PASSPHRASE="replace-with-passphrase-if-needed"
 ```bash
 cargo build --release --locked
 ROSWIRE_ACCEPTANCE_REMOTE=1 \
+ROSWIRE_ACCEPTANCE_SSH_HOST_KEY=SHA256:replace-with-routeros-host-key \
+ROSWIRE_ACCEPTANCE_ALLOW_FROM=203.0.113.10/32 \
 ROSWIRE_ACCEPTANCE_OUT=target/acceptance/routeros-v7-rest \
 ./scripts/routeros-acceptance.sh
 ```
@@ -121,4 +132,4 @@ target/acceptance/<target>/
 - [ ] import/export/backup live 工作流。
 - [ ] TLS 证书异常、认证失败、网络失败、权限不足。
 
-这些记录补齐前，#60 仍保持打开，`docs/production-readiness.md` 中的 production-stable 判定仍为阻塞。
+这些记录补齐前，`docs/production-readiness.md` 中的 production-stable 判定仍为阻塞。

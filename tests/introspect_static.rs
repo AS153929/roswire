@@ -220,11 +220,7 @@ fn doctor_json_is_local_by_default() {
 fn doctor_include_remote_reports_remote_error_in_json() {
     let temp = tempfile::tempdir().expect("temp dir should be created");
     let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
-    cmd.env("ROSWIRE_HOME", temp.path().join("missing-home"))
-        .env_remove("ROS_HOST")
-        .env_remove("ROS_USER")
-        .env_remove("ROS_PASSWORD")
-        .env_remove("ROS_PROFILE");
+    cmd.env("ROSWIRE_HOME", temp.path().join("missing-home"));
     cmd.args(["doctor", "--include-remote", "--json"])
         .assert()
         .success()

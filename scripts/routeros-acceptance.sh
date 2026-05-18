@@ -9,6 +9,9 @@ ROSWIRE_BIN="${ROSWIRE_BIN:-./target/release/roswire}"
 OUT_DIR="${ROSWIRE_ACCEPTANCE_OUT:-target/acceptance/routeros}"
 REMOTE_ENABLED="${ROSWIRE_ACCEPTANCE_REMOTE:-0}"
 FILE_WORKFLOWS_ENABLED="${ROSWIRE_ACCEPTANCE_RUN_FILE_WORKFLOWS:-0}"
+TRANSFER_DRY_RUN_ENABLED="${ROSWIRE_ACCEPTANCE_RUN_TRANSFER_DRY_RUN:-0}"
+ACCEPTANCE_SSH_HOST_KEY="${ROSWIRE_ACCEPTANCE_SSH_HOST_KEY:-}"
+ACCEPTANCE_ALLOW_FROM="${ROSWIRE_ACCEPTANCE_ALLOW_FROM:-}"
 
 mkdir -p "$OUT_DIR"
 
@@ -87,17 +90,19 @@ else
   run_case remote-explicit-rest --protocol rest system resource print --json
 fi
 
-if [[ -n "${ROS_SSH_HOST_KEY:-}" && -n "${ROS_SSH_ALLOW_FROM:-}" ]]; then
+if [[ "$TRANSFER_DRY_RUN_ENABLED" == "1" || -n "$ACCEPTANCE_SSH_HOST_KEY" || -n "$ACCEPTANCE_ALLOW_FROM" ]]; then
   sample="$OUT_DIR/roswire-acceptance.rsc"
   printf ':put "roswire acceptance"\n' > "$sample"
-  run_case transfer-file-upload-dry-run \
-    file upload "$sample" flash/roswire-acceptance.rsc \
-    --dry-run \
-    --ssh-host-key "$ROS_SSH_HOST_KEY" \
-    --allow-from "$ROS_SSH_ALLOW_FROM" \
-    --json
+  transfer_args=(file upload "$sample" flash/roswire-acceptance.rsc --dry-run --json)
+  if [[ -n "$ACCEPTANCE_SSH_HOST_KEY" ]]; then
+    transfer_args+=(--ssh-host-key "$ACCEPTANCE_SSH_HOST_KEY")
+  fi
+  if [[ -n "$ACCEPTANCE_ALLOW_FROM" ]]; then
+    transfer_args+=(--allow-from "$ACCEPTANCE_ALLOW_FROM")
+  fi
+  run_case transfer-file-upload-dry-run "${transfer_args[@]}"
 else
-  skip_case transfer-file-upload-dry-run "set ROS_SSH_HOST_KEY and ROS_SSH_ALLOW_FROM"
+  skip_case transfer-file-upload-dry-run "set ROSWIRE_ACCEPTANCE_RUN_TRANSFER_DRY_RUN=1 to use profile ssh_host_key/allow_from, or set ROSWIRE_ACCEPTANCE_SSH_HOST_KEY/ROSWIRE_ACCEPTANCE_ALLOW_FROM"
 fi
 
 if [[ "$FILE_WORKFLOWS_ENABLED" != "1" ]]; then
@@ -105,15 +110,14 @@ if [[ "$FILE_WORKFLOWS_ENABLED" != "1" ]]; then
 else
   sample="$OUT_DIR/roswire-acceptance-live.rsc"
   printf ':put "roswire live acceptance"\n' > "$sample"
-  run_case live-file-upload \
-    file upload "$sample" flash/roswire-acceptance-live.rsc \
-    --ssh-host-key "${ROS_SSH_HOST_KEY:-}" \
-    --json
-  run_case live-export-download \
-    export download "$OUT_DIR/roswire-export.rsc" \
-    --ssh-host-key "${ROS_SSH_HOST_KEY:-}" \
-    --cleanup \
-    --json
+  live_upload_args=(file upload "$sample" flash/roswire-acceptance-live.rsc --json)
+  live_export_args=(export download "$OUT_DIR/roswire-export.rsc" --cleanup --json)
+  if [[ -n "$ACCEPTANCE_SSH_HOST_KEY" ]]; then
+    live_upload_args+=(--ssh-host-key "$ACCEPTANCE_SSH_HOST_KEY")
+    live_export_args+=(--ssh-host-key "$ACCEPTANCE_SSH_HOST_KEY")
+  fi
+  run_case live-file-upload "${live_upload_args[@]}"
+  run_case live-export-download "${live_export_args[@]}"
 fi
 
 printf 'Acceptance harness finished. Review *.meta.json plus stdout/stderr payloads under %s.\n' "$OUT_DIR"

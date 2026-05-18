@@ -39,17 +39,23 @@ roswire doctor --json
 
 ## 快速开始
 
-1. 配置认证信息
+1. 配置 profile 与认证信息
 
-设置环境变量，避免每条 `roswire` 命令都显式携带密码。真实部署中建议使用密钥管理器，或至少使用不会记录历史的 shell 会话。
+设备、连接和传输字段通过命令行参数或 `~/.roswire/config.toml` profile 提供。`roswire` 不再从 `ROS_*` 环境变量读取单设备配置，避免多设备自动化时误连目标。下面示例使用 `env` secret 后端只保存环境变量名；生产环境也可以改用 keychain 或 encrypted secret。
 
 ```bash
-export ROS_HOST="192.168.88.1"
-export ROS_USER="admin"
-export ROS_PASSWORD="your_password"
-export ROS_PROTOCOL="auto"
-export ROS_ROUTEROS_VERSION="auto"
-export ROS_TRANSFER="ssh"
+export ROSWIRE_STUDIO_PASSWORD="your_password"
+roswire config init --json
+roswire config device add studio \
+  host=192.168.88.1 \
+  user=admin \
+  protocol=auto \
+  routeros_version=auto \
+  transfer=ssh \
+  ssh_host_key=SHA256:replace-with-routeros-host-key \
+  allow_from=203.0.113.10/32 \
+  --json
+roswire config secret set studio password type=env env=ROSWIRE_STUDIO_PASSWORD --json
 ```
 
 1. 执行命令（Agent 模式）
@@ -121,32 +127,21 @@ roswire ip address remove .id=*1 --json
 配置优先级：
 
 1. 命令行参数
-1. 环境变量
 1. `~/.roswire/config.toml` 中的 profile
 1. 协议默认值
 
 本地配置目录为 `~/.roswire/`，默认配置文件为 `config.toml`，本地日志写入 `~/.roswire/logs/` 并最多保留 30 天。密码默认建议保存到本机钥匙链；配置文件只保存 secret 引用。
 
-核心环境变量：
+进程级环境变量与 secret 后端变量：
 
 | 变量 | 用途 |
 | --- | --- |
-| `ROS_PROFILE` | 选择 `~/.roswire/config.toml` 中的 profile |
-| `ROS_HOST` | RouterOS 主机名或 IP 地址；不支持 MAC 地址直连 |
-| `ROS_USER` | RouterOS 用户名 |
-| `ROS_PASSWORD` | RouterOS 密码 |
 | `ROSWIRE_HOME` | 覆盖默认 `~/.roswire` 目录，主要用于测试或便携环境 |
-| `ROS_PROTOCOL` | `auto`、`api`、`api-ssl` 或 `rest` |
-| `ROS_ROUTEROS_VERSION` | `auto`、`v6` 或 `v7`，用于选择原生 API 方言 |
-| `ROS_TRANSFER` | 文件传输后端；当前唯一支持值为 `ssh` |
-| `ROS_SSH_PORT` | RouterOS SSH 服务端口，默认 `22` |
-| `ROS_SSH_USER` | SSH 文件传输用户名；默认复用 `ROS_USER` |
-| `ROS_SSH_PASSWORD` | SSH 文件传输密码；默认复用 `ROS_PASSWORD` |
-| `ROS_SSH_KEY` | SSH 私钥路径；设置后优先使用 key auth |
-| `ROS_SSH_KEY_PASSPHRASE` | 加密 SSH 私钥 passphrase；也可用 profile secret `ssh_key_passphrase` 非交互提供 |
-| `ROS_SSH_HOST_KEY` | RouterOS SSH host key 指纹，用于非交互校验服务器身份 |
-| `ROS_SSH_ALLOW_FROM` | 需要写入 `/ip service ssh address` 的客户端来源白名单 CIDR |
-| `ROS_PORT` | 显式协议的可选端口覆盖；`auto` 模式不接受单一端口覆盖 |
+| `ROSWIRE_DEBUG` | 启用脱敏 debug 诊断输出 |
+| `ROSWIRE_MASTER_KEY` | encrypted secret 默认 master key；也可用 secret 的 `key_id` 指向其它变量 |
+| profile secret `type=env` 指向的自定义变量 | 例如 `ROSWIRE_STUDIO_PASSWORD`，只作为 secret 后端读取，不参与设备字段优先级 |
+
+设备字段对应 profile key：`host`、`user`、`protocol`、`routeros_version`、`transfer`、`port`、`ssh_port`、`ssh_user`、`ssh_key`、`ssh_host_key`、`allow_from`；密码和 SSH passphrase 使用 profile secret（`password`、`ssh_password`、`ssh_key_passphrase`）。
 
 ## Agent 自描述接口
 
@@ -178,11 +173,11 @@ roswire explain-error ROS_API_FAILURE --json
 
 ## 调用优先级
 
-当 `ROS_PROTOCOL=auto` 时，`roswire` 会在首次连接阶段执行只读探测，判断 RouterOS 版本与可用协议，然后把实际命令路由到合适后端。
+当 `protocol=auto`（默认）时，`roswire` 会在首次连接阶段执行只读探测，判断 RouterOS 版本与可用协议，然后把实际命令路由到合适后端。
 
 固定优先级如下：
 
-1. 显式指定非 `auto` 的 `--protocol` 或 `ROS_PROTOCOL` 时，严格按指定协议调用，不自动改道。
+1. 显式指定非 `auto` 的 `--protocol` 或 profile `protocol` 时，严格按指定协议调用，不自动改道。
 1. 自动模式下优先探测 `rest`，再探测 `api-ssl`，最后探测 `api`。
 1. 如果确认是 RouterOS v7，且 REST 可用、当前动作有 REST 映射，则优先走 REST。
 1. 如果 REST 不可用，或者当前动作没有 REST 映射，则回落到 RouterOS v7 原生 API 方言。
@@ -196,7 +191,7 @@ RouterOS v6 与 v7 都支持原生 API，但它们在登录流程、菜单字段
 
 - 共享 TCP/TLS 连接、RouterOS sentence 编解码和 `!re`/`!done`/`!trap` 解析。
 - 分开实现 v6 与 v7 的登录兼容、字段归一化、动作映射和测试 fixture。
-- 默认使用 `ROS_ROUTEROS_VERSION=auto` 自动探测；必要时可以显式设置为 `v6` 或 `v7`，避免 Agent 在不确定环境里误判。
+- 默认使用 `routeros_version=auto` 自动探测；必要时可以通过 `--routeros-version` 或 profile 显式设置为 `v6` / `v7`，避免 Agent 在不确定环境里误判。
 - 允许方言层保留适度重复代码，优先换取行为清晰和测试稳定；但不复制底层传输与编码逻辑。
 
 ## 协议映射
@@ -232,9 +227,9 @@ roswire export download ./config.rsc --compact --ensure-ssh --allow-from 203.0.1
 - 创建并下载导出配置：先执行 `/export file=...`，再下载生成的 `.rsc` 文件。
 - 写入 `/system/script`：如果只是把本地文本作为脚本 source，可以直接通过 API/REST 设置 `source=@local-file` 的内容，不必先上传成文件；需要限制大小并禁止二进制。
 
-文件传输只支持 SSH 通道。`roswire` 可以通过 API/REST 检查并配置 `/ip service ssh`：启用 SSH 服务、设置端口、把 `--allow-from` / `ROS_SSH_ALLOW_FROM` 写入服务的 `address` 白名单。默认不擅自打开 SSH；只有显式传入 `--ensure-ssh` 时才允许修改设备服务配置。传输结束后可以按策略恢复原始 SSH 服务状态。
+文件传输只支持 SSH 通道。`roswire` 可以通过 API/REST 检查并配置 `/ip service ssh`：启用 SSH 服务、设置端口、把 `--allow-from` 或 profile `allow_from` 写入服务的 `address` 白名单。默认不擅自打开 SSH；只有显式传入 `--ensure-ssh` 时才允许修改设备服务配置。传输结束后可以按策略恢复原始 SSH 服务状态。
 
-注意：`host` / `ROS_HOST` / `--host` 必须是可路由的 IP 地址或 DNS 名。RouterOS 的 MAC 地址只适用于二层发现/邻居发现场景，当前 CLI 的 API、REST 与 SSH 连接不支持 MAC 地址直连。
+注意：profile `host` 或 `--host` 必须是可路由的 IP 地址或 DNS 名。RouterOS 的 MAC 地址只适用于二层发现/邻居发现场景，当前 CLI 的 API、REST 与 SSH 连接不支持 MAC 地址直连。
 
 实现阶段必须验证目标 RouterOS 版本实际支持的 SSH 文件传输子协议，并统一封装在 `ssh` transfer 后端下。不要默认假设 REST API 支持 multipart 上传，也不要保留 FTP、`/tool fetch` 等其它文件传输后端。
 
@@ -246,7 +241,7 @@ flowchart TD
 
   subgraph roswire[roswire]
     parser[参数解析器<br/>clap]
-    context[上下文引擎<br/>环境变量 / 配置加载]
+    context[上下文引擎<br/>CLI / profile / 配置加载]
     schema[自描述与 schema 引擎<br/>静态目录 / 远端覆盖 / 缓存]
     router[协议路由器<br/>根据配置选择 API / REST]
     discovery[首次连接探测<br/>版本 / 能力 / 优先级]

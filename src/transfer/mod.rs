@@ -29,7 +29,6 @@ const DEFAULT_TRANSFER_TIMEOUT_SECONDS: u64 = 30;
 const DEFAULT_CLEANUP_TIMEOUT_SECONDS: u64 = 10;
 const MAX_TRANSFER_RETRIES: u8 = 5;
 const WORKFLOW_FILE_WAIT_INTERVAL: Duration = Duration::from_secs(1);
-const SSH_KEY_PASSPHRASE_ENV: &str = "ROS_SSH_KEY_PASSPHRASE";
 const SSH_KEY_PASSPHRASE_SECRET: &str = "ssh_key_passphrase";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -547,19 +546,19 @@ fn execute_transfer_for_env(
     cli: &Cli,
     env: &BTreeMap<String, String>,
 ) -> RosWireResult<TransferResultPayload> {
-    let backend = resolve_transfer_backend(cli, env)?;
+    let profile = load_selected_profile(cli, env)?;
+    let backend = resolve_transfer_backend(cli, profile.as_ref())?;
     if backend != DEFAULT_TRANSFER_BACKEND {
         return Err(Box::new(RosWireError::usage(format!(
             "unsupported transfer backend: {backend}",
         ))));
     }
-    let context = transfer_context(&command, &backend, cli, env);
+    let context = transfer_context(&command, &backend, cli, profile.as_ref());
     let policy = transfer_policy(cli)
         .map_err(|error| Box::new((*error).clone().with_context(context.clone())))?;
-    let profile = load_selected_profile(cli, env)?;
     let ssh_runtime = resolve_ssh_runtime_config(cli, env, profile.as_ref())
         .map_err(|error| Box::new((*error).clone().with_context(context.clone())))?;
-    let allow_from = resolve_allow_from_for_runtime(cli, env, &context)?;
+    let allow_from = resolve_allow_from_for_runtime(cli, profile.as_ref(), &context)?;
 
     match &command {
         TransferCommand::FileUpload { local, remote } => {
@@ -945,22 +944,23 @@ fn build_plan_for_env(
     cli: &Cli,
     env: &BTreeMap<String, String>,
 ) -> RosWireResult<TransferPlan> {
+    let profile = load_selected_profile(cli, env)?;
     if let Some(host) = cli
         .host
         .as_deref()
-        .or_else(|| env.get("ROS_HOST").map(String::as_str))
+        .or_else(|| profile.as_ref().and_then(|profile| profile.host.as_deref()))
     {
         config::validate_remote_host(host)?;
     }
 
-    let backend = resolve_transfer_backend(cli, env)?;
+    let backend = resolve_transfer_backend(cli, profile.as_ref())?;
     if backend != DEFAULT_TRANSFER_BACKEND {
         return Err(Box::new(RosWireError::usage(format!(
             "unsupported transfer backend: {backend}",
         ))));
     }
 
-    let context = transfer_context(&command, &backend, cli, env);
+    let context = transfer_context(&command, &backend, cli, profile.as_ref());
     let policy = transfer_policy(cli)
         .map_err(|error| Box::new((*error).clone().with_context(context.clone())))?;
     if !cli.dry_run {
@@ -975,7 +975,11 @@ fn build_plan_for_env(
     let host_key = cli
         .ssh_host_key
         .clone()
-        .or_else(|| env.get("ROS_SSH_HOST_KEY").cloned())
+        .or_else(|| {
+            profile
+                .as_ref()
+                .and_then(|profile| profile.ssh_host_key.clone())
+        })
         .filter(|value| !value.trim().is_empty());
     if host_key.is_none() {
         return Err(Box::new(
@@ -986,12 +990,13 @@ fn build_plan_for_env(
         ));
     }
 
-    let allow_from = resolve_allow_from(cli, env).map_err(|error| {
-        Box::new(
-            (*error)
-                .clone()
-                .with_context(transfer_context(&command, &backend, cli, env)),
-        )
+    let allow_from = resolve_allow_from(cli, profile.as_ref()).map_err(|error| {
+        Box::new((*error).clone().with_context(transfer_context(
+            &command,
+            &backend,
+            cli,
+            profile.as_ref(),
+        )))
     })?;
     if allow_from.is_empty() {
         return Err(Box::new(
@@ -1002,7 +1007,6 @@ fn build_plan_for_env(
         ));
     }
 
-    let profile = load_selected_profile(cli, env)?;
     let ssh = resolve_ssh_transfer_summary(cli, env, profile.as_ref())?;
 
     Ok(plan_from_command(
@@ -1010,11 +1014,14 @@ fn build_plan_for_env(
     ))
 }
 
-fn resolve_transfer_backend(cli: &Cli, env: &BTreeMap<String, String>) -> RosWireResult<String> {
+fn resolve_transfer_backend(
+    cli: &Cli,
+    profile: Option<&config::ProfileConfig>,
+) -> RosWireResult<String> {
     let backend = cli
         .transfer
         .map(|value| value.as_str().to_owned())
-        .or_else(|| env.get("ROS_TRANSFER").cloned())
+        .or_else(|| profile.and_then(|profile| profile.transfer.clone()))
         .unwrap_or_else(|| DEFAULT_TRANSFER_BACKEND.to_owned());
     match backend.as_str() {
         DEFAULT_TRANSFER_BACKEND => Ok(backend),
@@ -1024,13 +1031,17 @@ fn resolve_transfer_backend(cli: &Cli, env: &BTreeMap<String, String>) -> RosWir
     }
 }
 
-fn resolve_allow_from(cli: &Cli, env: &BTreeMap<String, String>) -> RosWireResult<Vec<String>> {
-    let mut values = cli.allow_from.clone();
-    if values.is_empty() {
-        if let Some(env_value) = env.get("ROS_SSH_ALLOW_FROM") {
-            values.extend(env_value.split(',').map(str::to_owned));
-        }
-    }
+fn resolve_allow_from(
+    cli: &Cli,
+    profile: Option<&config::ProfileConfig>,
+) -> RosWireResult<Vec<String>> {
+    let values = if !cli.allow_from.is_empty() {
+        cli.allow_from.clone()
+    } else {
+        profile
+            .map(|profile| profile.allow_from.clone())
+            .unwrap_or_default()
+    };
 
     let mut cidrs = Vec::new();
     for value in values {
@@ -1049,19 +1060,19 @@ fn resolve_allow_from(cli: &Cli, env: &BTreeMap<String, String>) -> RosWireResul
 
 fn resolve_allow_from_for_runtime(
     cli: &Cli,
-    env: &BTreeMap<String, String>,
+    profile: Option<&config::ProfileConfig>,
     context: &ErrorContext,
 ) -> RosWireResult<Vec<String>> {
     if !cli.ensure_ssh {
         return Ok(Vec::new());
     }
 
-    let allow_from = resolve_allow_from(cli, env)
+    let allow_from = resolve_allow_from(cli, profile)
         .map_err(|error| Box::new((*error).clone().with_context(context.clone())))?;
     if allow_from.is_empty() {
         return Err(Box::new(
             RosWireError::ssh_whitelist_required(
-                "--ensure-ssh requires at least one allow-from CIDR to merge into /ip service ssh address",
+                "--ensure-ssh requires at least one allow-from CIDR from --allow-from or profile allow_from to merge into /ip service ssh address",
             )
             .with_context(context.clone()),
         ));
@@ -1229,53 +1240,44 @@ fn load_selected_profile(
     config::ensure_secure_directory_permissions(&paths.home)?;
     config::ensure_secure_file_permissions(&paths.config)?;
     let config_file = config::load_config_file(&paths.config)?;
-    let profile_name = config::select_active_profile(
-        cli.profile.as_deref(),
-        env.get("ROS_PROFILE").map(String::as_str),
-        &config_file,
-    )?;
+    let profile_name = match config::select_active_profile(cli.profile.as_deref(), &config_file) {
+        Ok(profile_name) => profile_name,
+        Err(error) if cli.profile.is_some() => return Err(error),
+        Err(_) => return Ok(None),
+    };
     Ok(config_file.profiles.get(&profile_name).cloned())
 }
 
 fn resolve_ssh_transfer_summary(
     cli: &Cli,
-    env: &BTreeMap<String, String>,
+    _env: &BTreeMap<String, String>,
     profile: Option<&config::ProfileConfig>,
 ) -> RosWireResult<SshTransferSummary> {
-    let port = match cli
+    let port = cli
         .ssh_port
-        .map(Ok)
-        .or_else(|| env.get("ROS_SSH_PORT").map(|value| parse_port(value)))
-        .or_else(|| profile.and_then(|profile| profile.ssh_port.map(Ok)))
-    {
-        Some(port) => port?,
-        None => 22,
-    };
+        .or_else(|| profile.and_then(|profile| profile.ssh_port))
+        .unwrap_or(22);
 
     let user = cli
         .ssh_user
         .clone()
-        .or_else(|| env.get("ROS_SSH_USER").cloned())
         .or_else(|| profile.and_then(|profile| profile.ssh_user.clone()))
         .or_else(|| cli.user.clone())
-        .or_else(|| env.get("ROS_USER").cloned())
         .or_else(|| profile.and_then(|profile| profile.user.clone()))
         .unwrap_or_else(|| "reuse-api-user".to_owned());
 
     let key_path = cli
         .ssh_key
         .clone()
-        .or_else(|| env.get("ROS_SSH_KEY").cloned())
         .or_else(|| profile.and_then(|profile| profile.ssh_key.clone()))
         .filter(|value| !value.trim().is_empty())
         .map(|value| redact_local_path(&value));
-    let key_passphrase = key_passphrase_status(key_path.is_some(), env, profile);
+    let key_passphrase = key_passphrase_status(key_path.is_some(), profile);
     let auth_method = if key_path.is_some() && key_passphrase == "provided" {
         "key-encrypted".to_owned()
     } else if key_path.is_some() {
         "key".to_owned()
     } else if cli.ssh_password.is_some()
-        || env.get("ROS_SSH_PASSWORD").is_some()
         || profile.is_some_and(|profile| profile.secrets.contains_key("ssh_password"))
     {
         "password".to_owned()
@@ -1301,11 +1303,10 @@ fn resolve_ssh_runtime_config(
     let host = cli
         .host
         .clone()
-        .or_else(|| env.get("ROS_HOST").cloned())
         .or_else(|| profile.and_then(|profile| profile.host.clone()))
         .ok_or_else(|| {
             Box::new(RosWireError::config(
-                "missing SSH transfer host; set --host, ROS_HOST, or profile host",
+                "missing SSH transfer host; set --host or profile host",
             ))
         })?;
     config::validate_remote_host(&host)?;
@@ -1313,14 +1314,13 @@ fn resolve_ssh_runtime_config(
     let summary = resolve_ssh_transfer_summary(cli, env, profile)?;
     if summary.user == "reuse-api-user" {
         return Err(Box::new(RosWireError::config(
-            "missing SSH transfer user; set --ssh-user, ROS_SSH_USER, --user, ROS_USER, or profile user",
+            "missing SSH transfer user; set --ssh-user, --user, or profile user",
         )));
     }
 
     let key_path = cli
         .ssh_key
         .clone()
-        .or_else(|| env.get("ROS_SSH_KEY").cloned())
         .or_else(|| profile.and_then(|profile| profile.ssh_key.clone()))
         .filter(|value| !value.trim().is_empty());
     let password = if key_path.is_some() {
@@ -1336,7 +1336,7 @@ fn resolve_ssh_runtime_config(
     let expected_host_key = cli
         .ssh_host_key
         .clone()
-        .or_else(|| env.get("ROS_SSH_HOST_KEY").cloned())
+        .or_else(|| profile.and_then(|profile| profile.ssh_host_key.clone()))
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| {
             Box::new(RosWireError::ssh_host_key_required(
@@ -1355,20 +1355,12 @@ fn resolve_ssh_runtime_config(
     })
 }
 
-fn key_passphrase_status(
-    has_key_path: bool,
-    env: &BTreeMap<String, String>,
-    profile: Option<&config::ProfileConfig>,
-) -> String {
+fn key_passphrase_status(has_key_path: bool, profile: Option<&config::ProfileConfig>) -> String {
     if !has_key_path {
         return "not-applicable".to_owned();
     }
 
-    if env
-        .get(SSH_KEY_PASSPHRASE_ENV)
-        .is_some_and(|value| !value.trim().is_empty())
-        || profile.is_some_and(|profile| profile.secrets.contains_key(SSH_KEY_PASSPHRASE_SECRET))
-    {
+    if profile.is_some_and(|profile| profile.secrets.contains_key(SSH_KEY_PASSPHRASE_SECRET)) {
         "provided".to_owned()
     } else {
         "not-provided".to_owned()
@@ -1379,14 +1371,6 @@ fn resolve_ssh_key_passphrase(
     env: &BTreeMap<String, String>,
     profile: Option<&config::ProfileConfig>,
 ) -> RosWireResult<Option<String>> {
-    if let Some(passphrase) = env
-        .get(SSH_KEY_PASSPHRASE_ENV)
-        .filter(|value| !value.trim().is_empty())
-        .cloned()
-    {
-        return Ok(Some(passphrase));
-    }
-
     let Some(profile) = profile else {
         return Ok(None);
     };
@@ -1399,19 +1383,13 @@ fn resolve_ssh_password(
     env: &BTreeMap<String, String>,
     profile: Option<&config::ProfileConfig>,
 ) -> RosWireResult<String> {
-    if let Some(password) = cli
-        .ssh_password
-        .clone()
-        .or_else(|| env.get("ROS_SSH_PASSWORD").cloned())
-        .or_else(|| cli.password.clone())
-        .or_else(|| env.get("ROS_PASSWORD").cloned())
-    {
+    if let Some(password) = cli.ssh_password.clone().or_else(|| cli.password.clone()) {
         return Ok(password);
     }
 
     let Some(profile) = profile else {
         return Err(Box::new(RosWireError::config(
-            "missing SSH transfer password; set --ssh-password, ROS_SSH_PASSWORD, --password, ROS_PASSWORD, or profile secret ssh_password/password",
+            "missing SSH transfer password; set --ssh-password, --password, or profile secret ssh_password/password",
         )));
     };
 
@@ -1419,7 +1397,7 @@ fn resolve_ssh_password(
         .or_else(|| config::resolve_profile_secret_value(profile, "password", env).ok().flatten())
         .ok_or_else(|| {
             Box::new(RosWireError::config(
-                "missing SSH transfer password; set --ssh-password, ROS_SSH_PASSWORD, or profile secret ssh_password/password",
+                "missing SSH transfer password; set --ssh-password, --password, or profile secret ssh_password/password",
             ))
         })
 }
@@ -1432,11 +1410,10 @@ fn resolve_control_runtime_config(
     let host = cli
         .host
         .clone()
-        .or_else(|| env.get("ROS_HOST").cloned())
         .or_else(|| profile.and_then(|profile| profile.host.clone()))
         .ok_or_else(|| {
             Box::new(RosWireError::config(
-                "missing RouterOS control host; set --host, ROS_HOST, or profile host",
+                "missing RouterOS control host; set --host or profile host",
             ))
         })?;
     config::validate_remote_host(&host)?;
@@ -1444,29 +1421,22 @@ fn resolve_control_runtime_config(
     let user = cli
         .user
         .clone()
-        .or_else(|| env.get("ROS_USER").cloned())
         .or_else(|| profile.and_then(|profile| profile.user.clone()))
         .ok_or_else(|| {
             Box::new(RosWireError::config(
-                "missing RouterOS control user; set --user, ROS_USER, or profile user",
+                "missing RouterOS control user; set --user or profile user",
             ))
         })?;
     let password = resolve_control_password(cli, env, profile)?;
     let requested_protocol = cli
         .protocol
         .map(|value| value.as_str().to_owned())
-        .or_else(|| env.get("ROS_PROTOCOL").cloned())
         .or_else(|| profile.and_then(|profile| profile.protocol.clone()))
         .unwrap_or_else(|| "auto".to_owned());
     validate_control_protocol(&requested_protocol)?;
 
-    let env_port = match env.get("ROS_PORT") {
-        Some(value) => Some(parse_port(value)?),
-        None => None,
-    };
     let explicit_port = cli
         .port
-        .or(env_port)
         .or_else(|| profile.and_then(|profile| profile.port));
     if requested_protocol == "auto" && explicit_port.is_some() {
         return Err(Box::new(RosWireError::config(
@@ -1494,22 +1464,18 @@ fn resolve_control_password(
     env: &BTreeMap<String, String>,
     profile: Option<&config::ProfileConfig>,
 ) -> RosWireResult<String> {
-    if let Some(password) = cli
-        .password
-        .clone()
-        .or_else(|| env.get("ROS_PASSWORD").cloned())
-    {
+    if let Some(password) = cli.password.clone() {
         return Ok(password);
     }
 
     let Some(profile) = profile else {
         return Err(Box::new(RosWireError::config(
-            "missing RouterOS control password; set --password, ROS_PASSWORD, or profile secret password",
+            "missing RouterOS control password; set --password or profile secret password",
         )));
     };
     config::resolve_profile_secret_value(profile, "password", env)?.ok_or_else(|| {
         Box::new(RosWireError::config(
-            "missing RouterOS control password; set --password, ROS_PASSWORD, or profile secret password",
+            "missing RouterOS control password; set --password or profile secret password",
         ))
     })
 }
@@ -2209,7 +2175,7 @@ fn open_ssh_session(
             .map_err(|error| {
                 Box::new(
                     RosWireError::auth_failed(format!(
-                        "SSH key authentication failed: {error}; if the private key is encrypted, set {SSH_KEY_PASSPHRASE_ENV} or profile secret {SSH_KEY_PASSPHRASE_SECRET}"
+                        "SSH key authentication failed: {error}; if the private key is encrypted, configure profile secret {SSH_KEY_PASSPHRASE_SECRET}"
                     ))
                     .with_context(context.clone()),
                 )
@@ -2316,6 +2282,7 @@ fn copy_with_sha256<R: Read, W: Write>(
     Ok((bytes, format!("{:x}", hasher.finalize())))
 }
 
+#[cfg(test)]
 fn parse_port(value: &str) -> RosWireResult<u16> {
     value.parse::<u16>().map_err(|error| {
         Box::new(RosWireError::usage(format!(
@@ -2429,7 +2396,7 @@ fn transfer_context(
     command: &TransferCommand,
     backend: &str,
     cli: &Cli,
-    env: &BTreeMap<String, String>,
+    profile: Option<&config::ProfileConfig>,
 ) -> ErrorContext {
     ErrorContext {
         command: command.command_name().to_owned(),
@@ -2442,25 +2409,19 @@ fn transfer_context(
         requested_protocol: cli
             .protocol
             .map(|value| value.as_str().to_owned())
-            .unwrap_or_else(|| {
-                env.get("ROS_PROTOCOL")
-                    .cloned()
-                    .unwrap_or_else(|| "auto".to_owned())
-            }),
+            .or_else(|| profile.and_then(|profile| profile.protocol.clone()))
+            .unwrap_or_else(|| "auto".to_owned()),
         selected_protocol: "unknown".to_owned(),
         transfer_backend: Some(backend.to_owned()),
         routeros_version: cli
             .routeros_version
             .map(|value| value.as_str().to_owned())
-            .unwrap_or_else(|| {
-                env.get("ROS_ROUTEROS_VERSION")
-                    .cloned()
-                    .unwrap_or_else(|| "auto".to_owned())
-            }),
+            .or_else(|| profile.and_then(|profile| profile.routeros_version.clone()))
+            .unwrap_or_else(|| "auto".to_owned()),
         host: cli
             .host
             .clone()
-            .or_else(|| env.get("ROS_HOST").cloned())
+            .or_else(|| profile.and_then(|profile| profile.host.clone()))
             .unwrap_or_default(),
         resolved_args: error::redact_resolved_args(&command.context_args()),
     }
@@ -2696,7 +2657,7 @@ mod tests {
     }
 
     #[test]
-    fn ssh_transfer_summary_prefers_cli_then_env_then_profile_and_redacts_key_path() {
+    fn ssh_transfer_summary_prefers_cli_then_profile_and_redacts_key_path() {
         let temp = tempfile::tempdir().expect("temp dir should be created");
         write_config(
             temp.path(),
@@ -2738,15 +2699,7 @@ target = "password"
         let command = parse_transfer_command(&cli.tokens)
             .expect("transfer command should be detected")
             .expect("transfer command should parse");
-        let env = BTreeMap::from([
-            ("ROSWIRE_HOME".to_owned(), temp.path().display().to_string()),
-            ("ROS_SSH_PORT".to_owned(), "2222".to_owned()),
-            ("ROS_SSH_USER".to_owned(), "env-ssh".to_owned()),
-            (
-                "ROS_SSH_KEY".to_owned(),
-                "/Users/env/.ssh/id_env".to_owned(),
-            ),
-        ]);
+        let env = BTreeMap::from([("ROSWIRE_HOME".to_owned(), temp.path().display().to_string())]);
 
         let plan = build_plan_for_env(command, &cli, &env).expect("plan should build");
 
@@ -2760,7 +2713,7 @@ target = "password"
     }
 
     #[test]
-    fn ssh_transfer_summary_uses_env_then_profile_fallbacks() {
+    fn ssh_transfer_summary_uses_profile_fallbacks_and_ignores_ros_env() {
         let temp = tempfile::tempdir().expect("temp dir should be created");
         write_config(
             temp.path(),
@@ -2804,7 +2757,7 @@ target = "password"
         let plan = build_plan_for_env(command, &cli, &env).expect("plan should build");
 
         assert_eq!(plan.preconditions.ssh.port, 2200);
-        assert_eq!(plan.preconditions.ssh.user, "env-ssh");
+        assert_eq!(plan.preconditions.ssh.user, "profile-ssh");
         assert_eq!(plan.preconditions.ssh.auth_method, "password");
         assert_eq!(plan.preconditions.ssh.key_path, None);
     }
@@ -3169,6 +3122,8 @@ target = "password"
             "198.51.100.10",
             "--user",
             "api-user",
+            "--ssh-host-key",
+            "SHA256:test",
             "--ssh-key",
             "/Users/example/.ssh/id_ed25519",
             "file",
@@ -3177,10 +3132,9 @@ target = "password"
             "setup.rsc",
         ])
         .expect("cli should parse");
-        let env = BTreeMap::from([("ROS_SSH_HOST_KEY".to_owned(), "SHA256:from-env".to_owned())]);
 
-        let runtime =
-            resolve_ssh_runtime_config(&cli, &env, None).expect("runtime config should resolve");
+        let runtime = resolve_ssh_runtime_config(&cli, &isolated_env(), None)
+            .expect("runtime config should resolve");
 
         assert_eq!(runtime.host, "198.51.100.10");
         assert_eq!(runtime.user, "api-user");
@@ -3189,17 +3143,19 @@ target = "password"
             runtime.key_path.as_deref(),
             Some("/Users/example/.ssh/id_ed25519")
         );
-        assert_eq!(runtime.expected_host_key, "SHA256:from-env");
+        assert_eq!(runtime.expected_host_key, "SHA256:test");
     }
 
     #[test]
-    fn runtime_config_resolves_key_passphrase_from_env_without_leaking_to_summary() {
+    fn runtime_config_ignores_ros_key_passphrase_env_without_leaking_to_summary() {
         let cli = Cli::try_parse_from([
             "roswire",
             "--host",
             "198.51.100.10",
             "--ssh-user",
             "admin",
+            "--ssh-host-key",
+            "SHA256:test",
             "--ssh-key",
             "/Users/example/.ssh/id_ed25519",
             "file",
@@ -3208,23 +3164,20 @@ target = "password"
             "setup.rsc",
         ])
         .expect("cli should parse");
-        let env = BTreeMap::from([
-            ("ROS_SSH_HOST_KEY".to_owned(), "SHA256:from-env".to_owned()),
-            (
-                "ROS_SSH_KEY_PASSPHRASE".to_owned(),
-                "phrase-secret".to_owned(),
-            ),
-        ]);
+        let env = BTreeMap::from([(
+            "ROS_SSH_KEY_PASSPHRASE".to_owned(),
+            "phrase-secret".to_owned(),
+        )]);
 
         let summary =
             resolve_ssh_transfer_summary(&cli, &env, None).expect("summary should resolve");
         let runtime =
             resolve_ssh_runtime_config(&cli, &env, None).expect("runtime config should resolve");
 
-        assert_eq!(summary.auth_method, "key-encrypted");
-        assert_eq!(summary.key_passphrase, "provided");
+        assert_eq!(summary.auth_method, "key");
+        assert_eq!(summary.key_passphrase, "not-provided");
         assert_eq!(summary.data_plane, "sftp-with-scp-fallback");
-        assert_eq!(runtime.key_passphrase.as_deref(), Some("phrase-secret"));
+        assert_eq!(runtime.key_passphrase, None);
     }
 
     #[test]
@@ -3342,7 +3295,7 @@ value = "profile-phrase"
             .expect("cli should parse");
 
         assert_eq!(
-            resolve_transfer_backend(&cli, &isolated_env()).expect("ssh backend should resolve"),
+            resolve_transfer_backend(&cli, None).expect("ssh backend should resolve"),
             "ssh"
         );
         assert!(parse_port("not-a-port").is_err());
@@ -3885,7 +3838,7 @@ value = "profile-phrase"
     }
 
     #[test]
-    fn control_runtime_resolves_env_profile_and_validation_paths() {
+    fn control_runtime_resolves_profile_and_ignores_ros_env() {
         let temp = tempfile::tempdir().expect("temp dir should be created");
         write_config(
             temp.path(),
@@ -3919,21 +3872,6 @@ value = "profile-secret"
         assert_eq!(profile_runtime.password, "profile-secret");
         assert_eq!(profile_runtime.selected_protocol, "rest");
         assert_eq!(profile_runtime.port, 443);
-
-        let env_runtime = resolve_control_runtime_config(
-            &cli,
-            &BTreeMap::from([
-                ("ROS_HOST".to_owned(), "203.0.113.10".to_owned()),
-                ("ROS_USER".to_owned(), "env-api".to_owned()),
-                ("ROS_PASSWORD".to_owned(), "env-secret".to_owned()),
-                ("ROS_PROTOCOL".to_owned(), "api".to_owned()),
-                ("ROS_PORT".to_owned(), "8728".to_owned()),
-            ]),
-            None,
-        )
-        .expect("env runtime should resolve");
-        assert_eq!(env_runtime.selected_protocol, "api");
-        assert_eq!(env_runtime.port, 8728);
 
         let auto_with_port = Cli::try_parse_from([
             "roswire",
@@ -3974,9 +3912,9 @@ value = "profile-secret"
                 ]),
                 None,
             )
-            .expect_err("bad protocol should fail")
+            .expect_err("ROS_* control env should be ignored")
             .error_code,
-            ErrorCode::UsageError,
+            ErrorCode::ConfigError,
         );
     }
 

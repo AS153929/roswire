@@ -70,7 +70,7 @@ cargo llvm-cov --workspace --all-features --fail-under-lines 85
 必须优先覆盖纯逻辑：
 
 - CLI path/action 解析。
-- 配置优先级：CLI > 环境变量 > profile > 默认值。
+- 配置优先级：CLI > profile > 默认值；设备级 `ROS_*` 环境变量不得参与解析。
 - `~/.roswire` / `ROSWIRE_HOME` 路径解析与权限检查。
 - secret 引用、`same-as` 循环检测、明文 secret 安全限制。
 - JSON 错误结构、字段顺序、脱敏规则。

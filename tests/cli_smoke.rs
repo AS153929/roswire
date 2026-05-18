@@ -47,10 +47,6 @@ fn registered_write_command_reaches_connection_resolution() {
     let temp = tempfile::tempdir().expect("temp dir should be created");
     let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
     cmd.env("ROSWIRE_HOME", temp.path())
-        .env_remove("ROS_PROFILE")
-        .env_remove("ROS_HOST")
-        .env_remove("ROS_USER")
-        .env_remove("ROS_PASSWORD")
         .args([
             "ip",
             "address",
@@ -106,10 +102,6 @@ fn script_put_reaches_connection_resolution_without_leaking_source() {
     let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
 
     cmd.env("ROSWIRE_HOME", temp.path().join("missing-home"))
-        .env_remove("ROS_PROFILE")
-        .env_remove("ROS_HOST")
-        .env_remove("ROS_USER")
-        .env_remove("ROS_PASSWORD")
         .args([
             "script",
             "put",
@@ -131,14 +123,7 @@ fn script_put_reaches_connection_resolution_without_leaking_source() {
 fn readonly_print_without_connection_config_returns_config_error() {
     let temp = tempfile::tempdir().expect("temp dir should be created");
     let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
-    cmd.env("ROSWIRE_HOME", temp.path())
-        .env_remove("ROS_PROFILE")
-        .env_remove("ROS_HOST")
-        .env_remove("ROS_USER")
-        .env_remove("ROS_PASSWORD")
-        .env_remove("ROS_PORT")
-        .env_remove("ROS_PROTOCOL")
-        .env_remove("ROS_ROUTEROS_VERSION");
+    cmd.env("ROSWIRE_HOME", temp.path());
     cmd.args(["interface", "print", "--json"])
         .assert()
         .failure()
@@ -151,10 +136,6 @@ fn raw_print_reaches_connection_resolution_without_allow_write() {
     let temp = tempfile::tempdir().expect("temp dir should be created");
     let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
     cmd.env("ROSWIRE_HOME", temp.path())
-        .env_remove("ROS_PROFILE")
-        .env_remove("ROS_HOST")
-        .env_remove("ROS_USER")
-        .env_remove("ROS_PASSWORD")
         .args(["raw", "/system/resource/print", "detail=yes", "--json"])
         .assert()
         .failure()
@@ -189,10 +170,6 @@ fn raw_write_with_allow_write_reaches_connection_resolution() {
     let temp = tempfile::tempdir().expect("temp dir should be created");
     let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
     cmd.env("ROSWIRE_HOME", temp.path())
-        .env_remove("ROS_PROFILE")
-        .env_remove("ROS_HOST")
-        .env_remove("ROS_USER")
-        .env_remove("ROS_PASSWORD")
         .args([
             "raw",
             "/tool/fetch",
@@ -239,10 +216,6 @@ fn system_package_print_is_registered_before_connection_resolution() {
     let temp = tempfile::tempdir().expect("temp dir should be created");
     let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
     cmd.env("ROSWIRE_HOME", temp.path())
-        .env_remove("ROS_PROFILE")
-        .env_remove("ROS_HOST")
-        .env_remove("ROS_USER")
-        .env_remove("ROS_PASSWORD")
         .args(["system", "package", "print", "--json"])
         .assert()
         .failure()
@@ -256,10 +229,6 @@ fn user_print_is_registered_before_connection_resolution() {
     let temp = tempfile::tempdir().expect("temp dir should be created");
     let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
     cmd.env("ROSWIRE_HOME", temp.path())
-        .env_remove("ROS_PROFILE")
-        .env_remove("ROS_HOST")
-        .env_remove("ROS_USER")
-        .env_remove("ROS_PASSWORD")
         .args(["user", "print", "--json"])
         .assert()
         .failure()
@@ -273,10 +242,6 @@ fn ip_route_print_is_registered_before_connection_resolution() {
     let temp = tempfile::tempdir().expect("temp dir should be created");
     let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
     cmd.env("ROSWIRE_HOME", temp.path())
-        .env_remove("ROS_PROFILE")
-        .env_remove("ROS_HOST")
-        .env_remove("ROS_USER")
-        .env_remove("ROS_PASSWORD")
         .args(["ip", "route", "print", "--json"])
         .assert()
         .failure()
@@ -290,10 +255,6 @@ fn firewall_print_is_registered_before_connection_resolution() {
     let temp = tempfile::tempdir().expect("temp dir should be created");
     let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
     cmd.env("ROSWIRE_HOME", temp.path())
-        .env_remove("ROS_PROFILE")
-        .env_remove("ROS_HOST")
-        .env_remove("ROS_USER")
-        .env_remove("ROS_PASSWORD")
         .args(["ip", "firewall", "nat", "print", "--json"])
         .assert()
         .failure()
@@ -307,10 +268,6 @@ fn tool_print_is_registered_before_connection_resolution() {
     let temp = tempfile::tempdir().expect("temp dir should be created");
     let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
     cmd.env("ROSWIRE_HOME", temp.path())
-        .env_remove("ROS_PROFILE")
-        .env_remove("ROS_HOST")
-        .env_remove("ROS_USER")
-        .env_remove("ROS_PASSWORD")
         .args(["tool", "netwatch", "print", "--json"])
         .assert()
         .failure()
@@ -324,10 +281,6 @@ fn wireguard_prints_are_registered_before_connection_resolution() {
     let temp = tempfile::tempdir().expect("temp dir should be created");
     let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
     cmd.env("ROSWIRE_HOME", temp.path())
-        .env_remove("ROS_PROFILE")
-        .env_remove("ROS_HOST")
-        .env_remove("ROS_USER")
-        .env_remove("ROS_PASSWORD")
         .args(["interface", "wireguard", "print", "--json"])
         .assert()
         .failure()
@@ -338,10 +291,6 @@ fn wireguard_prints_are_registered_before_connection_resolution() {
     let mut peers = Command::cargo_bin("roswire").expect("binary should compile");
     peers
         .env("ROSWIRE_HOME", temp.path())
-        .env_remove("ROS_PROFILE")
-        .env_remove("ROS_HOST")
-        .env_remove("ROS_USER")
-        .env_remove("ROS_PASSWORD")
         .args(["interface", "wireguard", "peers", "print", "--json"])
         .assert()
         .failure()

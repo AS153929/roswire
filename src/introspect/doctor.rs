@@ -91,7 +91,7 @@ pub fn doctor_payload(cli: &Cli) -> RosWireResult<String> {
 
 fn local_doctor(
     cli: &Cli,
-    env: &BTreeMap<String, String>,
+    _env: &BTreeMap<String, String>,
     paths: &ConfigPaths,
 ) -> RosWireResult<(LocalDoctor, Option<ConfigFile>)> {
     let home_exists = paths.home.exists();
@@ -125,11 +125,7 @@ fn local_doctor(
 
     if let Some(config_file) = &config_file {
         profiles = config_file.profiles.keys().cloned().collect();
-        match config::select_active_profile(
-            cli.profile.as_deref(),
-            env.get("ROS_PROFILE").map(String::as_str),
-            config_file,
-        ) {
+        match config::select_active_profile(cli.profile.as_deref(), config_file) {
             Ok(profile_name) => {
                 if let Some(profile) = config_file.profiles.get(&profile_name) {
                     match config::resolve_profile_secrets(profile) {
@@ -307,20 +303,15 @@ fn remote_error(selected_protocol: &str, error: &RosWireError) -> RemoteDoctor {
 
 fn local_routeros_version_hint(
     cli: &Cli,
-    env: &BTreeMap<String, String>,
+    _env: &BTreeMap<String, String>,
     config_file: Option<&ConfigFile>,
 ) -> Option<String> {
     cli.routeros_version
         .map(|value| value.as_str().to_owned())
-        .or_else(|| env.get("ROS_ROUTEROS_VERSION").cloned())
         .or_else(|| {
             let config_file = config_file?;
-            let profile_name = config::select_active_profile(
-                cli.profile.as_deref(),
-                env.get("ROS_PROFILE").map(String::as_str),
-                config_file,
-            )
-            .ok()?;
+            let profile_name =
+                config::select_active_profile(cli.profile.as_deref(), config_file).ok()?;
             config_file
                 .profiles
                 .get(&profile_name)
