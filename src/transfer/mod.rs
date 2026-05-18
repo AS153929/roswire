@@ -29,6 +29,8 @@ const DEFAULT_TRANSFER_TIMEOUT_SECONDS: u64 = 30;
 const DEFAULT_CLEANUP_TIMEOUT_SECONDS: u64 = 10;
 const MAX_TRANSFER_RETRIES: u8 = 5;
 const WORKFLOW_FILE_WAIT_INTERVAL: Duration = Duration::from_secs(1);
+const SSH_KEY_PASSPHRASE_ENV: &str = "ROS_SSH_KEY_PASSPHRASE";
+const SSH_KEY_PASSPHRASE_SECRET: &str = "ssh_key_passphrase";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TransferPolicy {
@@ -176,6 +178,8 @@ pub struct SshTransferSummary {
     pub port: u16,
     pub user: String,
     pub auth_method: String,
+    pub key_passphrase: String,
+    pub data_plane: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key_path: Option<String>,
 }
@@ -226,6 +230,7 @@ struct SshRuntimeConfig {
     user: String,
     password: Option<String>,
     key_path: Option<String>,
+    key_passphrase: Option<String>,
     expected_host_key: String,
 }
 
@@ -1264,7 +1269,10 @@ fn resolve_ssh_transfer_summary(
         .or_else(|| profile.and_then(|profile| profile.ssh_key.clone()))
         .filter(|value| !value.trim().is_empty())
         .map(|value| redact_local_path(&value));
-    let auth_method = if key_path.is_some() {
+    let key_passphrase = key_passphrase_status(key_path.is_some(), env, profile);
+    let auth_method = if key_path.is_some() && key_passphrase == "provided" {
+        "key-encrypted".to_owned()
+    } else if key_path.is_some() {
         "key".to_owned()
     } else if cli.ssh_password.is_some()
         || env.get("ROS_SSH_PASSWORD").is_some()
@@ -1279,6 +1287,8 @@ fn resolve_ssh_transfer_summary(
         port,
         user,
         auth_method,
+        key_passphrase,
+        data_plane: "sftp-with-scp-fallback".to_owned(),
         key_path,
     })
 }
@@ -1318,6 +1328,11 @@ fn resolve_ssh_runtime_config(
     } else {
         Some(resolve_ssh_password(cli, env, profile)?)
     };
+    let key_passphrase = if key_path.is_some() {
+        resolve_ssh_key_passphrase(env, profile)?
+    } else {
+        None
+    };
     let expected_host_key = cli
         .ssh_host_key
         .clone()
@@ -1335,8 +1350,48 @@ fn resolve_ssh_runtime_config(
         user: summary.user,
         password,
         key_path,
+        key_passphrase,
         expected_host_key,
     })
+}
+
+fn key_passphrase_status(
+    has_key_path: bool,
+    env: &BTreeMap<String, String>,
+    profile: Option<&config::ProfileConfig>,
+) -> String {
+    if !has_key_path {
+        return "not-applicable".to_owned();
+    }
+
+    if env
+        .get(SSH_KEY_PASSPHRASE_ENV)
+        .is_some_and(|value| !value.trim().is_empty())
+        || profile.is_some_and(|profile| profile.secrets.contains_key(SSH_KEY_PASSPHRASE_SECRET))
+    {
+        "provided".to_owned()
+    } else {
+        "not-provided".to_owned()
+    }
+}
+
+fn resolve_ssh_key_passphrase(
+    env: &BTreeMap<String, String>,
+    profile: Option<&config::ProfileConfig>,
+) -> RosWireResult<Option<String>> {
+    if let Some(passphrase) = env
+        .get(SSH_KEY_PASSPHRASE_ENV)
+        .filter(|value| !value.trim().is_empty())
+        .cloned()
+    {
+        return Ok(Some(passphrase));
+    }
+
+    let Some(profile) = profile else {
+        return Ok(None);
+    };
+
+    config::resolve_profile_secret_value(profile, SSH_KEY_PASSPHRASE_SECRET, env)
 }
 
 fn resolve_ssh_password(
@@ -1899,12 +1954,27 @@ fn execute_upload(
     }
 
     let session = open_ssh_session(config, policy, context)?;
-    let sftp = session.sftp().map_err(|error| {
-        Box::new(
-            RosWireError::file_transfer_failed(format!("failed to open SFTP session: {error}"))
-                .with_context(context.clone()),
-        )
-    })?;
+    let sftp = match session.sftp() {
+        Ok(sftp) => sftp,
+        Err(error) => {
+            return sftp_or_scp_fallback(
+                "upload",
+                Err(sftp_session_unavailable_error(error, context)),
+                || execute_scp_upload(&session, local, remote, metadata.len(), context),
+                context,
+            );
+        }
+    };
+
+    execute_sftp_upload(&sftp, local, remote, context)
+}
+
+fn execute_sftp_upload(
+    sftp: &ssh2::Sftp,
+    local: &str,
+    remote: &str,
+    context: &ErrorContext,
+) -> RosWireResult<(u64, String)> {
     let mut source = File::open(local).map_err(|error| {
         Box::new(
             RosWireError::file_transfer_failed(format!("failed to open local file: {error}"))
@@ -1920,6 +1990,34 @@ fn execute_upload(
     copy_with_sha256(&mut source, &mut target, context)
 }
 
+fn execute_scp_upload(
+    session: &ssh2::Session,
+    local: &str,
+    remote: &str,
+    bytes: u64,
+    context: &ErrorContext,
+) -> RosWireResult<(u64, String)> {
+    let mut source = File::open(local).map_err(|error| {
+        Box::new(
+            RosWireError::file_transfer_failed(format!("failed to open local file: {error}"))
+                .with_context(context.clone()),
+        )
+    })?;
+    let mut target = session
+        .scp_send(Path::new(remote), 0o644, bytes, None)
+        .map_err(|error| {
+            Box::new(
+                RosWireError::file_transfer_failed(format!(
+                    "SCP upload fallback failed to open remote file: {error}"
+                ))
+                .with_context(context.clone()),
+            )
+        })?;
+    let result = copy_with_sha256(&mut source, &mut target, context)?;
+    finish_scp_send(&mut target, context)?;
+    Ok(result)
+}
+
 fn execute_download(
     remote: &str,
     local: &str,
@@ -1928,12 +2026,27 @@ fn execute_download(
     context: &ErrorContext,
 ) -> RosWireResult<(u64, String)> {
     let session = open_ssh_session(config, policy, context)?;
-    let sftp = session.sftp().map_err(|error| {
-        Box::new(
-            RosWireError::file_transfer_failed(format!("failed to open SFTP session: {error}"))
-                .with_context(context.clone()),
-        )
-    })?;
+    let sftp = match session.sftp() {
+        Ok(sftp) => sftp,
+        Err(error) => {
+            return sftp_or_scp_fallback(
+                "download",
+                Err(sftp_session_unavailable_error(error, context)),
+                || execute_scp_download(&session, remote, local, context),
+                context,
+            );
+        }
+    };
+
+    execute_sftp_download(&sftp, remote, local, context)
+}
+
+fn execute_sftp_download(
+    sftp: &ssh2::Sftp,
+    remote: &str,
+    local: &str,
+    context: &ErrorContext,
+) -> RosWireResult<(u64, String)> {
     let mut source = sftp.open(Path::new(remote)).map_err(|error| {
         Box::new(
             RosWireError::file_transfer_failed(format!("failed to open remote file: {error}"))
@@ -1947,6 +2060,97 @@ fn execute_download(
         )
     })?;
     copy_with_sha256(&mut source, &mut target, context)
+}
+
+fn execute_scp_download(
+    session: &ssh2::Session,
+    remote: &str,
+    local: &str,
+    context: &ErrorContext,
+) -> RosWireResult<(u64, String)> {
+    let (mut source, _stat) = session.scp_recv(Path::new(remote)).map_err(|error| {
+        Box::new(
+            RosWireError::file_transfer_failed(format!(
+                "SCP download fallback failed to open remote file: {error}"
+            ))
+            .with_context(context.clone()),
+        )
+    })?;
+    let mut target = File::create(local).map_err(|error| {
+        Box::new(
+            RosWireError::file_transfer_failed(format!("failed to create local file: {error}"))
+                .with_context(context.clone()),
+        )
+    })?;
+    let result = copy_with_sha256(&mut source, &mut target, context)?;
+    finish_scp_recv(&mut source, context)?;
+    Ok(result)
+}
+
+fn sftp_session_unavailable_error(error: ssh2::Error, context: &ErrorContext) -> Box<RosWireError> {
+    Box::new(
+        RosWireError::file_transfer_failed(format!("SFTP subsystem is unavailable: {error}"))
+            .with_context(context.clone()),
+    )
+}
+
+fn sftp_or_scp_fallback<T, F>(
+    operation: &str,
+    sftp_result: RosWireResult<T>,
+    scp_operation: F,
+    context: &ErrorContext,
+) -> RosWireResult<T>
+where
+    F: FnOnce() -> RosWireResult<T>,
+{
+    match sftp_result {
+        Ok(value) => Ok(value),
+        Err(sftp_error) => match scp_operation() {
+            Ok(value) => Ok(value),
+            Err(scp_error) => Err(Box::new(
+                RosWireError::file_transfer_failed(format!(
+                    "SFTP {operation} is unavailable and SCP fallback failed: sftp: {}; scp: {}",
+                    sftp_error.message, scp_error.message
+                ))
+                .with_context(context.clone()),
+            )),
+        },
+    }
+}
+
+fn finish_scp_send(channel: &mut ssh2::Channel, context: &ErrorContext) -> RosWireResult<()> {
+    channel.send_eof().map_err(|error| {
+        Box::new(
+            RosWireError::file_transfer_failed(format!("SCP upload failed to send EOF: {error}"))
+                .with_context(context.clone()),
+        )
+    })?;
+    finish_scp_channel(channel, context)
+}
+
+fn finish_scp_recv(channel: &mut ssh2::Channel, context: &ErrorContext) -> RosWireResult<()> {
+    finish_scp_channel(channel, context)
+}
+
+fn finish_scp_channel(channel: &mut ssh2::Channel, context: &ErrorContext) -> RosWireResult<()> {
+    channel.wait_eof().map_err(|error| {
+        Box::new(
+            RosWireError::file_transfer_failed(format!("SCP channel failed before EOF: {error}"))
+                .with_context(context.clone()),
+        )
+    })?;
+    channel.close().map_err(|error| {
+        Box::new(
+            RosWireError::file_transfer_failed(format!("SCP channel failed to close: {error}"))
+                .with_context(context.clone()),
+        )
+    })?;
+    channel.wait_close().map_err(|error| {
+        Box::new(
+            RosWireError::file_transfer_failed(format!("SCP channel close failed: {error}"))
+                .with_context(context.clone()),
+        )
+    })
 }
 
 fn open_ssh_session(
@@ -1996,11 +2200,18 @@ fn open_ssh_session(
 
     if let Some(key_path) = &config.key_path {
         session
-            .userauth_pubkey_file(&config.user, None, Path::new(key_path), None)
+            .userauth_pubkey_file(
+                &config.user,
+                None,
+                Path::new(key_path),
+                config.key_passphrase.as_deref(),
+            )
             .map_err(|error| {
                 Box::new(
-                    RosWireError::auth_failed(format!("SSH key authentication failed: {error}"))
-                        .with_context(context.clone()),
+                    RosWireError::auth_failed(format!(
+                        "SSH key authentication failed: {error}; if the private key is encrypted, set {SSH_KEY_PASSPHRASE_ENV} or profile secret {SSH_KEY_PASSPHRASE_SECRET}"
+                    ))
+                    .with_context(context.clone()),
                 )
             })?;
     } else {
@@ -2322,7 +2533,8 @@ mod tests {
         build_plan_for_env, copy_with_sha256, default_transfer_policy, execute_classic_control,
         execute_file_workflow, handle_transfer_for_env, host_key_matches, load_selected_profile,
         merge_ssh_allow_list, parse_port, parse_transfer_command, resolve_control_runtime_config,
-        resolve_ssh_runtime_config, resolve_transfer_backend, routeros_bool, selected_context,
+        resolve_ssh_key_passphrase, resolve_ssh_runtime_config, resolve_ssh_transfer_summary,
+        resolve_transfer_backend, routeros_bool, selected_context, sftp_or_scp_fallback,
         sha256_fingerprint, ssh_service_snapshot_from_fields, ssh_service_snapshot_from_json,
         transfer_policy, validate_safe_cidr, ControlCommand, ControlRuntimeConfig,
         LiveWorkflowBackend, SshRuntimeConfig, SshServiceSnapshot, TransferCommand,
@@ -2978,6 +3190,150 @@ target = "password"
             Some("/Users/example/.ssh/id_ed25519")
         );
         assert_eq!(runtime.expected_host_key, "SHA256:from-env");
+    }
+
+    #[test]
+    fn runtime_config_resolves_key_passphrase_from_env_without_leaking_to_summary() {
+        let cli = Cli::try_parse_from([
+            "roswire",
+            "--host",
+            "198.51.100.10",
+            "--ssh-user",
+            "admin",
+            "--ssh-key",
+            "/Users/example/.ssh/id_ed25519",
+            "file",
+            "download",
+            "flash/setup.rsc",
+            "setup.rsc",
+        ])
+        .expect("cli should parse");
+        let env = BTreeMap::from([
+            ("ROS_SSH_HOST_KEY".to_owned(), "SHA256:from-env".to_owned()),
+            (
+                "ROS_SSH_KEY_PASSPHRASE".to_owned(),
+                "phrase-secret".to_owned(),
+            ),
+        ]);
+
+        let summary =
+            resolve_ssh_transfer_summary(&cli, &env, None).expect("summary should resolve");
+        let runtime =
+            resolve_ssh_runtime_config(&cli, &env, None).expect("runtime config should resolve");
+
+        assert_eq!(summary.auth_method, "key-encrypted");
+        assert_eq!(summary.key_passphrase, "provided");
+        assert_eq!(summary.data_plane, "sftp-with-scp-fallback");
+        assert_eq!(runtime.key_passphrase.as_deref(), Some("phrase-secret"));
+    }
+
+    #[test]
+    fn runtime_config_resolves_key_passphrase_from_profile_secret() {
+        let temp = tempfile::tempdir().expect("temp dir should be created");
+        write_config(
+            temp.path(),
+            r#"
+version = 1
+default_profile = "studio"
+
+[profiles.studio]
+host = "198.51.100.10"
+user = "api-user"
+ssh_user = "ssh-profile"
+ssh_key = "/Users/profile/.ssh/id_profile"
+allow_plain_secrets = true
+
+[profiles.studio.secrets.ssh_key_passphrase]
+type = "plain"
+value = "profile-phrase"
+"#,
+        );
+        let cli = Cli::try_parse_from([
+            "roswire",
+            "--ssh-host-key",
+            "SHA256:test",
+            "file",
+            "download",
+            "flash/setup.rsc",
+            "setup.rsc",
+        ])
+        .expect("cli should parse");
+        let env = BTreeMap::from([("ROSWIRE_HOME".to_owned(), temp.path().display().to_string())]);
+        let profile = load_selected_profile(&cli, &env)
+            .expect("profile should load")
+            .expect("profile should exist");
+
+        let passphrase = resolve_ssh_key_passphrase(&env, Some(&profile))
+            .expect("passphrase secret should resolve");
+        let runtime = resolve_ssh_runtime_config(&cli, &env, Some(&profile))
+            .expect("runtime config should resolve");
+
+        assert_eq!(passphrase.as_deref(), Some("profile-phrase"));
+        assert_eq!(runtime.key_passphrase.as_deref(), Some("profile-phrase"));
+        assert_eq!(runtime.password, None);
+    }
+
+    #[test]
+    fn sftp_or_scp_fallback_returns_sftp_result_without_scp_attempt() {
+        let context = workflow_context("file/download");
+
+        let result = sftp_or_scp_fallback(
+            "download",
+            Ok((5, "sftp-sha".to_owned())),
+            || panic!("SCP fallback should not run after SFTP success"),
+            &context,
+        )
+        .expect("SFTP result should be returned");
+
+        assert_eq!(result, (5, "sftp-sha".to_owned()));
+    }
+
+    #[test]
+    fn sftp_or_scp_fallback_prefers_scp_when_sftp_is_unavailable() {
+        let context = workflow_context("file/download");
+        let sftp_error = Box::new(
+            crate::error::RosWireError::file_transfer_failed("SFTP subsystem is unavailable")
+                .with_context(context.clone()),
+        );
+
+        let result = sftp_or_scp_fallback(
+            "download",
+            Err(sftp_error),
+            || Ok((7, "scp-sha".to_owned())),
+            &context,
+        )
+        .expect("SCP fallback should succeed");
+
+        assert_eq!(result, (7, "scp-sha".to_owned()));
+    }
+
+    #[test]
+    fn sftp_or_scp_fallback_combines_errors_when_both_are_unavailable() {
+        let context = workflow_context("file/upload");
+        let sftp_error = Box::new(
+            crate::error::RosWireError::file_transfer_failed("SFTP subsystem is unavailable")
+                .with_context(context.clone()),
+        );
+
+        let error = sftp_or_scp_fallback::<(u64, String), _>(
+            "upload",
+            Err(sftp_error),
+            || {
+                Err(Box::new(
+                    crate::error::RosWireError::file_transfer_failed(
+                        "SCP subsystem rejected channel",
+                    )
+                    .with_context(context.clone()),
+                ))
+            },
+            &context,
+        )
+        .expect_err("combined fallback failure should be surfaced");
+
+        assert_eq!(error.error_code, ErrorCode::FileTransferFailed);
+        assert!(error.message.contains("SFTP upload is unavailable"));
+        assert!(error.message.contains("SCP fallback failed"));
+        assert!(error.message.contains("SCP subsystem rejected channel"));
     }
 
     #[test]
@@ -3971,6 +4327,7 @@ value = "profile-secret"
                 user: "ssh-user".to_owned(),
                 password: Some("ssh-secret".to_owned()),
                 key_path: None,
+                key_passphrase: None,
                 expected_host_key: "SHA256:test".to_owned(),
             },
             ControlRuntimeConfig {

@@ -31,6 +31,40 @@ fn file_upload_dry_run_writes_plan_to_stdout_only() {
 }
 
 #[test]
+fn file_upload_dry_run_marks_encrypted_key_without_leaking_passphrase() {
+    let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
+    let passphrase = "SMOKE_KEY_PASSPHRASE_SECRET";
+
+    cmd.env("ROS_SSH_KEY_PASSPHRASE", passphrase)
+        .args([
+            "file",
+            "upload",
+            "/Users/example/private/setup.rsc",
+            "flash/setup.rsc",
+            "--dry-run",
+            "--ssh-host-key",
+            "SHA256:test",
+            "--ssh-key",
+            "/Users/example/.ssh/id_ed25519",
+            "--allow-from",
+            "203.0.113.10/32",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty())
+        .stdout(predicate::str::contains(
+            "\"auth_method\":\"key-encrypted\"",
+        ))
+        .stdout(predicate::str::contains("\"key_passphrase\":\"provided\""))
+        .stdout(predicate::str::contains(
+            "\"data_plane\":\"sftp-with-scp-fallback\"",
+        ))
+        .stdout(predicate::str::contains("***REDACTED***/id_ed25519"))
+        .stdout(predicate::str::contains(passphrase).not());
+}
+
+#[test]
 fn transfer_missing_host_key_writes_structured_error_to_stderr() {
     let mut cmd = Command::cargo_bin("roswire").expect("binary should compile");
 

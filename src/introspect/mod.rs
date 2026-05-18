@@ -757,6 +757,7 @@ fn catalog() -> Vec<CommandDefinition> {
                 "roswire config secret set studio-router password type=plain value=All.007! --json".to_owned(),
                 "roswire config secret set studio-router password type=keychain service=roswire account=profiles/studio-router/password --json".to_owned(),
                 "roswire config secret set studio-router ssh_password type=same-as target=password --json".to_owned(),
+                "roswire config secret set studio-router ssh_key_passphrase type=env var=ROS_SSH_KEY_PASSPHRASE --json".to_owned(),
             ],
             errors: vec![
                 "USAGE_ERROR".to_owned(),

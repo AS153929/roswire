@@ -1,6 +1,6 @@
 # RosWire 功能 Checklist
 
-> 最后更新：2026-05-17
+> 最后更新：2026-05-18
 > 基准分支：`main`
 > 已创建 backlog issues：`#60`-`#76`
 
@@ -46,6 +46,7 @@
 - [x] `--ssh-user` / `ROS_SSH_USER`
 - [x] `--ssh-password` / `ROS_SSH_PASSWORD`
 - [x] `--ssh-key` / `ROS_SSH_KEY`
+- [x] `ROS_SSH_KEY_PASSPHRASE` / profile secret `ssh_key_passphrase`
 - [x] `--ssh-host-key` / `ROS_SSH_HOST_KEY`
 - [x] `--allow-from` / `ROS_SSH_ALLOW_FROM`
 - [x] `--ensure-ssh`
@@ -89,7 +90,7 @@
 - [x] same-as 循环检测
 - [x] `--stdin` secret 输入
 - [x] secret inspect / config inspect 不泄露真实值
-- [ ] 加密私钥 passphrase 非交互支持
+- [x] 加密私钥 passphrase 非交互支持（`ROS_SSH_KEY_PASSPHRASE` / profile secret `ssh_key_passphrase`）
 - [ ] 多平台 keychain smoke test 矩阵
 
 ## RouterOS 命令映射
@@ -181,9 +182,11 @@
 - [x] SSH host key fingerprint 必填与校验
 - [x] SSH password auth
 - [x] SSH key auth
+- [x] 加密 SSH key passphrase 非交互解析
 - [x] SSH 用户/密码可与 API 控制面凭据分离
 - [x] 默认复用 API 用户/密码作为 SSH 凭据
 - [x] SFTP 数据面
+- [x] SFTP 不可用时 SCP fallback
 - [x] SHA256 checksum
 - [x] 64 MiB 文件大小限制
 - [x] 本地绝对路径脱敏
@@ -192,8 +195,8 @@
 - [x] host key 不匹配返回 `SSH_HOST_KEY_MISMATCH`
 - [x] 文件过大返回 `FILE_TOO_LARGE`
 - [x] 传输失败返回 `FILE_TRANSFER_FAILED`
-- [ ] SCP fallback
-- [ ] 加密 SSH 私钥 passphrase 支持
+- [x] SCP fallback（SFTP subsystem 打不开时尝试 SCP）
+- [x] 加密 SSH 私钥 passphrase 支持（env/profile secret；不新增 passphrase CLI 明文参数）
 - [ ] 真实 RouterOS SFTP/SCP 兼容矩阵验证
 
 ## 文件工作流
@@ -214,8 +217,8 @@
 - [x] 控制面支持 classic API
 - [x] 控制面支持 REST POST JSON
 - [x] 数据面复用 SSH/SFTP
-- [ ] 覆盖策略可配置化
-- [ ] 超时/重试策略更细粒度配置
+- [x] 覆盖策略可配置化（#66）
+- [x] 超时/重试策略更细粒度配置（#66）
 - [ ] 真实设备 import/export/backup 端到端验证
 
 ## SSH 服务准备与白名单
@@ -336,8 +339,8 @@
 - #63 `M8: 定义生产级稳定版验收门槛`
 - #64 `M7: 扩展远端 schema cache TTL/refresh 与菜单 overlay`（完成：hit/miss/stale/refresh 决策、`--refresh`、overlay enum 来源标记）
 - #65 `M7: 实现 SSH 服务 ensure/restore 与白名单合并`（完成：SSH service 快照、enable/address 合并、成功/失败 restore、`SSH_RESTORE_FAILED`）
-- #66 `M7: 增强文件工作流覆盖策略、超时与重试`
-- #67 `M7: 实现 SCP fallback 与加密 SSH 私钥 passphrase 支持`
+- #66 `M7: 增强文件工作流覆盖策略、超时与重试`（完成：`--if-exists`、transfer timeouts、有限 retry、dry-run policy）
+- #67 `M7: 实现 SCP fallback 与加密 SSH 私钥 passphrase 支持`（完成：SFTP subsystem 不可用时 SCP fallback、`ROS_SSH_KEY_PASSPHRASE` / profile secret `ssh_key_passphrase`、脱敏与 dry-run 标记；真机矩阵仍在 #60）
 - #68 `M7: 实现 system script put 工作流`（完成：dry-run、UTF-8/大小校验、classic/REST 写入映射与脱敏）
 - #69 `M7: 实现 RouterOS raw command passthrough`（完成：显式 raw、classic words、只读/写安全边界、REST raw 不开放说明）
 - #70 `M7: 扩展 /ip/firewall 命令族`（完成：address-list/filter/nat print）

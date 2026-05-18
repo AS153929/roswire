@@ -356,6 +356,7 @@ pub fn is_sensitive_key(key: &str) -> bool {
         "password",
         "token",
         "secret",
+        "passphrase",
         "private",
         "preshared",
         "ssh-key",
@@ -433,6 +434,7 @@ mod tests {
         let mut args = BTreeMap::new();
         args.insert("address".to_owned(), "192.168.88.2/24".to_owned());
         args.insert("password".to_owned(), "super-secret".to_owned());
+        args.insert("key_passphrase".to_owned(), "phrase-secret".to_owned());
         args.insert("api_token".to_owned(), "abc123".to_owned());
         args.insert("src-path".to_owned(), "/Users/example/setup.rsc".to_owned());
 
@@ -451,6 +453,10 @@ mod tests {
             Some("***REDACTED***")
         );
         assert_eq!(
+            sanitized.get("key_passphrase").map(String::as_str),
+            Some("***REDACTED***")
+        );
+        assert_eq!(
             sanitized.get("src-path").map(String::as_str),
             Some("***REDACTED***/setup.rsc")
         );
@@ -460,6 +466,8 @@ mod tests {
     fn sensitive_key_detection_is_case_insensitive() {
         assert!(is_sensitive_key("Password"));
         assert!(is_sensitive_key("SSH_KEY_PATH"));
+        assert!(is_sensitive_key("ssh_key_passphrase"));
+        assert!(is_sensitive_key("passphrase"));
         assert!(is_sensitive_key("privateKey"));
         assert!(is_sensitive_key("preshared-key"));
         assert!(is_sensitive_key("source"));
