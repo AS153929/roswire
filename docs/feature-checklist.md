@@ -16,7 +16,7 @@
 - [x] SSH/SFTP 文件上传下载完成
 - [x] import / export / backup 文件工作流完成
 - [x] JSONL 日志、保留策略与脱敏 debug 完成
-- [ ] 生产级真机矩阵验证
+- [ ] 生产级真机矩阵验证（#60；已提供 harness/矩阵文档，待真实 RouterOS/CHR 记录）
 - [ ] 更大范围 RouterOS 命令覆盖
 - [x] 发布打包与安装说明（#61）
 - [x] 生产级稳定版验收门槛定义（#63）
@@ -303,7 +303,7 @@
 - [x] `cargo test --workspace --all-features`
 - [x] `cargo llvm-cov --workspace --all-features --summary-only --fail-under-lines 85`
 - [x] 覆盖率门槛 85%
-- [ ] RouterOS CHR / 真机集成测试流水线
+- [ ] RouterOS CHR / 真机集成测试流水线（#60；harness 已提供，等待真实目标/凭据）
 - [ ] macOS / Linux / Windows 发布 smoke test
 - [x] keychain 多平台 smoke test（#62）
 
@@ -315,6 +315,7 @@
 - [x] `docs/production-readiness.md` 生产级稳定版验收门槛（#63）
 - [x] `docs/installation.md` 安装、校验、卸载说明（#61）
 - [x] `docs/release.md` 维护者发布流程（#61）
+- [x] `docs/routeros-acceptance-matrix.md` 真机/CHR 验收矩阵与 harness 说明（#60 准备工作）
 - [x] README 与当前实现的完整示例校正（#61）
 - [x] 安装说明（#61）
 - [x] GitHub Releases 发布流程（#61）
@@ -337,7 +338,7 @@
 
 ## Backlog issue 对照
 
-- #60 `M8: 建立 RouterOS 真机/CHR 验收矩阵`
+- #60 `M8: 建立 RouterOS 真机/CHR 验收矩阵`（准备完成：`scripts/routeros-acceptance.sh`、`docs/routeros-acceptance-matrix.md`；仍需真实 RouterOS/CHR 运行记录后关闭）
 - #61 `M8: 发布工程与安装文档`（完成：Windows artifact、release smoke、checksum、安装/发布文档）
 - #62 `M8: 多平台 keychain smoke 测试`（完成：`tests/keychain_smoke.rs` ignored smoke、CI `keychain-smoke` job、`docs/keychain-smoke.md` 平台依赖与 fallback）
 - #63 `M8: 定义生产级稳定版验收门槛`（完成：MVP/Beta/Production 边界、P0 blockers、质量门、发布物与安全门槛）
