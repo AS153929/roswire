@@ -18,7 +18,7 @@
 - [x] JSONL 日志、保留策略与脱敏 debug 完成
 - [ ] 生产级真机矩阵验证
 - [ ] 更大范围 RouterOS 命令覆盖
-- [ ] 发布打包与安装说明
+- [x] 发布打包与安装说明（#61）
 - [x] 生产级稳定版验收门槛定义（#63）
 
 ## CLI 与输出契约
@@ -313,11 +313,13 @@
 - [x] `docs/develop-plan.md` 开发规格与阶段计划
 - [x] `docs/feature-checklist.md` 功能完成度 checklist
 - [x] `docs/production-readiness.md` 生产级稳定版验收门槛（#63）
-- [ ] README 与当前实现的完整示例校正
-- [ ] 安装说明
-- [ ] GitHub Releases 发布流程
-- [ ] 二进制校验和
-- [ ] 平台打包说明
+- [x] `docs/installation.md` 安装、校验、卸载说明（#61）
+- [x] `docs/release.md` 维护者发布流程（#61）
+- [x] README 与当前实现的完整示例校正（#61）
+- [x] 安装说明（#61）
+- [x] GitHub Releases 发布流程（#61）
+- [x] 二进制校验和（#61）
+- [x] 平台打包说明（#61）
 
 ## 当前判断
 
@@ -336,7 +338,7 @@
 ## Backlog issue 对照
 
 - #60 `M8: 建立 RouterOS 真机/CHR 验收矩阵`
-- #61 `M8: 发布工程与安装文档`
+- #61 `M8: 发布工程与安装文档`（完成：Windows artifact、release smoke、checksum、安装/发布文档）
 - #62 `M8: 多平台 keychain smoke 测试`（完成：`tests/keychain_smoke.rs` ignored smoke、CI `keychain-smoke` job、`docs/keychain-smoke.md` 平台依赖与 fallback）
 - #63 `M8: 定义生产级稳定版验收门槛`（完成：MVP/Beta/Production 边界、P0 blockers、质量门、发布物与安全门槛）
 - #64 `M7: 扩展远端 schema cache TTL/refresh 与菜单 overlay`（完成：hit/miss/stale/refresh 决策、`--refresh`、overlay enum 来源标记）

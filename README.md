@@ -9,7 +9,7 @@
 
 与面向人类交互的传统 CLI 不同，`roswire` 不输出颜色、加载动画（spinner）、分页器（pager），也不做交互式提问。它的契约很简单：成功结果写入 `stdout`，结构化错误和诊断信息写入 `stderr`。
 
-> **项目状态：** 当前为 MVP / Beta 候选。核心 JSON-first CLI、配置、协议路由、自描述、SSH 文件传输与文件工作流已经闭环；生产级稳定版仍受真机/CHR 矩阵和发布工程阻塞。生产级门槛见 [`docs/production-readiness.md`](docs/production-readiness.md)，开发计划见 [`docs/develop-plan.md`](docs/develop-plan.md)。
+> **项目状态：** 当前为 MVP / Beta 候选。核心 JSON-first CLI、配置、协议路由、自描述、SSH 文件传输、文件工作流和发布工程已经闭环；生产级稳定版仍受真机/CHR 矩阵阻塞。生产级门槛见 [`docs/production-readiness.md`](docs/production-readiness.md)，开发计划见 [`docs/develop-plan.md`](docs/develop-plan.md)。
 
 ## 核心特性
 
@@ -22,18 +22,20 @@
 
 ## 安装
 
-实现完成后，预编译二进制文件计划通过 GitHub Releases 发布。
+预编译二进制由 GitHub Releases 提供，并随 release 附带 `checksums.txt`。安装前应先校验 SHA256，再解压或复制到 `PATH`。
 
-未来版本发布的安装形式预计如下：
+Linux/macOS 快速示例：
 
 ```bash
-curl -L https://github.com/AS153929/roswire/releases/latest/download/roswire-linux-amd64.tar.gz -o /tmp/roswire-linux-amd64.tar.gz
-curl -L https://github.com/AS153929/roswire/releases/latest/download/checksums.txt -o /tmp/roswire-checksums.txt
-cd /tmp && sha256sum -c --ignore-missing roswire-checksums.txt
-tar -xzf /tmp/roswire-linux-amd64.tar.gz -C /usr/local/bin roswire
+curl -L https://github.com/AS153929/roswire/releases/latest/download/roswire-linux-amd64.tar.gz -o roswire-linux-amd64.tar.gz
+curl -L https://github.com/AS153929/roswire/releases/latest/download/checksums.txt -o checksums.txt
+sha256sum -c checksums.txt --ignore-missing
+tar -xzf roswire-linux-amd64.tar.gz
+sudo install -m 0755 roswire /usr/local/bin/roswire
+roswire doctor --json
 ```
 
-在正式发布前，本仓库文档就是当前设计事实来源。
+完整安装、Windows PowerShell 校验、源码构建和卸载步骤见 [`docs/installation.md`](docs/installation.md)。维护者发布流程见 [`docs/release.md`](docs/release.md)。
 
 ## 快速开始
 

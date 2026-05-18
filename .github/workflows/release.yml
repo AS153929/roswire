@@ -33,6 +33,10 @@ jobs:
             os: macos-13
             target: aarch64-apple-darwin
             archive: roswire-macos-arm64.tar.gz
+          - asset_name: roswire-windows-amd64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: roswire-windows-amd64.zip
 
     steps:
       - name: Checkout
@@ -54,7 +58,21 @@ jobs:
       - name: Build release binary
         run: "cargo build --release --locked --target ${{ matrix.target }}"
 
-      - name: Package binary
+      - name: Smoke test release binary (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          "target/${{ matrix.target }}/release/roswire" doctor --json > smoke.json
+
+      - name: Smoke test release binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          .\target\${{ matrix.target }}\release\roswire.exe doctor --json | Out-File -Encoding utf8 smoke.json
+
+      - name: Package binary (Unix)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           set -euo pipefail
@@ -62,6 +80,14 @@ jobs:
           cp "target/${{ matrix.target }}/release/roswire" package/roswire
           chmod +x package/roswire
           tar -C package -czf "dist/${{ matrix.archive }}" roswire
+
+      - name: Package binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist, package | Out-Null
+          Copy-Item ".\target\${{ matrix.target }}\release\roswire.exe" ".\package\roswire.exe"
+          Compress-Archive -Path ".\package\roswire.exe" -DestinationPath ".\dist\${{ matrix.archive }}" -Force
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -88,13 +114,14 @@ jobs:
         run: |
           set -euo pipefail
           cd dist
-          sha256sum *.tar.gz > checksums.txt
+          sha256sum *.tar.gz *.zip > checksums.txt
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/*.tar.gz
+            dist/*.zip
             dist/checksums.txt
           generate_release_notes: true
         env:
