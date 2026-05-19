@@ -45,6 +45,36 @@ If Rust is already installed, crates.io installation is also supported after the
 cargo install roswire --locked
 ```
 
+### Agent skill
+
+The repository also ships an optional `roswire` agent skill under [`skills/roswire`](skills/roswire). It demonstrates how an AI agent can discover `roswire` command schemas, run read-only RouterOS evidence collection, and summarize JSON results safely. This installs the skill only; install the `roswire` binary separately using one of the methods above.
+
+Inspect the skills available in this repository:
+
+```bash
+npx skills add https://github.com/AS153929/roswire --list --full-depth
+```
+
+Install the `roswire` skill globally for all supported agents:
+
+```bash
+npx skills add https://github.com/AS153929/roswire --skill roswire --agent '*' --global --full-depth --yes
+```
+
+Install it for the current project instead:
+
+```bash
+npx skills add https://github.com/AS153929/roswire --skill roswire --agent '*' --full-depth --yes
+```
+
+When developing from a local checkout, run this from the repository root:
+
+```bash
+npx skills add . --skill roswire --agent '*' --global --full-depth --copy --yes
+```
+
+`--full-depth` is needed because the skill lives below `skills/roswire/` rather than at the repository root.
+
 For manual installation steps, Cargo installation notes, Windows PowerShell checksum verification, source builds, and uninstall instructions, see [`docs/installation.md`](docs/installation.md). Maintainer release procedures are documented in [`docs/release.md`](docs/release.md).
 
 ## Quick start

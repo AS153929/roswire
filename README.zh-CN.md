@@ -45,6 +45,36 @@ roswire doctor --json
 cargo install roswire --locked
 ```
 
+### Agent skill
+
+本仓库还在 [`skills/roswire`](skills/roswire) 下提供可选的 `roswire` Agent skill，用于展示 AI Agent 如何发现 `roswire` 命令 schema、执行只读 RouterOS 证据采集，并安全总结 JSON 结果。这里安装的是 Agent skill；`roswire` 二进制仍需通过上面的方式单独安装。
+
+查看本仓库可用的 skills：
+
+```bash
+npx skills add https://github.com/AS153929/roswire --list --full-depth
+```
+
+把 `roswire` skill 全局安装到所有支持的 Agent：
+
+```bash
+npx skills add https://github.com/AS153929/roswire --skill roswire --agent '*' --global --full-depth --yes
+```
+
+只安装到当前项目：
+
+```bash
+npx skills add https://github.com/AS153929/roswire --skill roswire --agent '*' --full-depth --yes
+```
+
+如果从本地 checkout 开发，在仓库根目录运行：
+
+```bash
+npx skills add . --skill roswire --agent '*' --global --full-depth --copy --yes
+```
+
+因为 skill 位于 `skills/roswire/`，而不是仓库根目录，所以需要 `--full-depth`。
+
 手动安装、Cargo 安装说明、Windows PowerShell 校验、源码构建和卸载步骤见 [`docs/installation.md`](docs/installation.md)。维护者发布流程见 [`docs/release.md`](docs/release.md)。
 
 ## 快速开始
