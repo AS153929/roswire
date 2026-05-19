@@ -55,6 +55,12 @@ Inspect the skills available in this repository:
 npx skills add https://github.com/AS153929/roswire --list --full-depth
 ```
 
+If the list shows `roswire`, install that specific skill:
+
+```bash
+npx skills add https://github.com/AS153929/roswire --skill roswire --full-depth
+```
+
 Install the `roswire` skill globally for all supported agents:
 
 ```bash
@@ -143,7 +149,7 @@ Output (`stdout`) is structured JSON; errors go to `stderr` as one structured JS
 | Check local setup | `roswire doctor --json` |
 | Create or inspect profiles | `roswire config init --json`, `roswire config profiles --json`, `roswire --profile studio config inspect --json` |
 | Store credentials safely | `roswire config secret set studio password type=env env=ROSWIRE_STUDIO_PASSWORD --json` or `type=keychain` |
-| Inventory interfaces, addresses, routes, and resources | `roswire --profile studio interface print --json`, `ip address print`, `ip route print`, `system resource print` |
+| Inventory interfaces, addresses, routes, and resources | `roswire --profile studio interface print --json`, `roswire --profile studio ip address print --json`, `roswire --profile studio ip route print --json`, `roswire --profile studio system resource print --json` |
 | Run unsupported read-only RouterOS print commands | `roswire --profile studio raw /system/resource/print --json` |
 | Preview file transfers safely | `roswire --profile studio file upload ./setup.rsc flash/setup.rsc --dry-run --ssh-host-key SHA256:replace-with-routeros-host-key --allow-from 203.0.113.10/32 --json` |
 

@@ -55,6 +55,12 @@ cargo install roswire --locked
 npx skills add https://github.com/AS153929/roswire --list --full-depth
 ```
 
+如果列表里出现 `roswire`，安装这个具体 skill：
+
+```bash
+npx skills add https://github.com/AS153929/roswire --skill roswire --full-depth
+```
+
 把 `roswire` skill 全局安装到所有支持的 Agent：
 
 ```bash
@@ -143,7 +149,7 @@ roswire --profile studio interface print --json
 | 检查本机环境 | `roswire doctor --json` |
 | 创建或检查 profile | `roswire config init --json`、`roswire config profiles --json`、`roswire --profile studio config inspect --json` |
 | 安全保存凭据 | `roswire config secret set studio password type=env env=ROSWIRE_STUDIO_PASSWORD --json` 或 `type=keychain` |
-| 查看接口、地址、路由和资源 | `roswire --profile studio interface print --json`、`ip address print`、`ip route print`、`system resource print` |
+| 查看接口、地址、路由和资源 | `roswire --profile studio interface print --json`、`roswire --profile studio ip address print --json`、`roswire --profile studio ip route print --json`、`roswire --profile studio system resource print --json` |
 | 执行未内置的只读 RouterOS print 命令 | `roswire --profile studio raw /system/resource/print --json` |
 | 安全预览文件传输 | `roswire --profile studio file upload ./setup.rsc flash/setup.rsc --dry-run --ssh-host-key SHA256:replace-with-routeros-host-key --allow-from 203.0.113.10/32 --json` |
 
