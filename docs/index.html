@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="roswire 官方主页：JSON-first RouterOS CLI 桥接器，面向 AI Agent 与自动化脚本，附交互式 3D 工作原理演示。"
+    />
+    <title>roswire · AI Agent RouterOS Bridge</title>
+    <link rel="stylesheet" href="./assets/styles.css?v=20260522d" />
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.164.1/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.164.1/examples/jsm/"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="site-header">
+        <a class="brand" href="./index.html">
+          <span class="brand-main">
+            <span class="brand-dot" aria-hidden="true"></span>
+            <span class="brand-name">roswire</span>
+          </span>
+          <span class="brand-subtitle">JSON-first RouterOS Bridge</span>
+        </a>
+
+        <nav class="top-nav" aria-label="主页导航">
+          <a href="#overview">概览</a>
+          <a href="#quickstart">快速开始</a>
+          <a href="#demo">3D 演示</a>
+          <a href="./installation.html">安装指南</a>
+          <a href="./production-readiness.html">生产门槛</a>
+        </nav>
+
+        <a
+          class="header-cta"
+          href="https://github.com/AS153929/roswire"
+          target="_blank"
+          rel="noreferrer"
+          >GitHub</a
+        >
+      </header>
+
+      <section id="home" class="hero-home">
+        <p class="badge">Project Homepage</p>
+        <h1>roswire：面向 AI Agent 的 RouterOS JSON-first CLI 桥接器</h1>
+        <p class="subtitle">
+          <code>roswire</code> 把传统“人类终端体验”改造成“机器稳定契约”——成功结果走
+          <code>stdout</code>，结构化错误走 <code>stderr</code>，默认非交互、默认只读，
+          为 Agent 自动化与 RouterOS 运维之间提供可靠的执行接口。
+        </p>
+
+        <div class="hero-actions">
+          <a class="btn primary" href="./installation.html">安装指南</a>
+          <a class="btn secondary" href="#demo">查看 3D 工作原理演示</a>
+          <a class="btn ghost" href="./production-readiness.html">生产就绪门槛</a>
+        </div>
+
+        <div class="chips" aria-label="核心特性">
+          <span>JSON-first</span>
+          <span>默认只读</span>
+          <span>Schema Discovery</span>
+          <span>Protocol Auto Route</span>
+          <span>Structured Error</span>
+          <span>Single Rust Binary</span>
+        </div>
+      </section>
+
+      <section id="overview" class="overview-grid" aria-label="项目概览">
+        <article class="feature-card">
+          <h2>稳定机器契约</h2>
+          <p>不输出颜色、spinner、分页器，避免 Agent 解析噪音，强调可自动化消费的结构化输出。</p>
+        </article>
+        <article class="feature-card">
+          <h2>协议与方言路由</h2>
+          <p>自动探测 REST / API-SSL / API，并按 RouterOS v6/v7 能力选择最优调用路径。</p>
+        </article>
+        <article class="feature-card">
+          <h2>安全默认值</h2>
+          <p>默认只读与 secret 脱敏，写入动作必须显式授权，支持 dry-run 风险预演。</p>
+        </article>
+        <article class="feature-card">
+          <h2>Agent 自描述接口</h2>
+          <p><code>help --json</code>、<code>schema command</code>、<code>config inspect</code> 等能力让 Agent 可自我修正。</p>
+        </article>
+      </section>
+
+      <section id="quickstart" class="quickstart-grid" aria-label="快速开始">
+        <article class="quick-card">
+          <h2>1) 安装与本机诊断</h2>
+          <pre><code>curl -fsSL https://raw.githubusercontent.com/AS153929/roswire/main/scripts/install.sh | sh
+roswire doctor --json</code></pre>
+        </article>
+        <article class="quick-card">
+          <h2>2) 初始化与 profile</h2>
+          <pre><code>roswire config init --json
+roswire config device add studio host=192.168.88.1 user=admin protocol=auto routeros_version=auto transfer=ssh --json</code></pre>
+        </article>
+        <article class="quick-card">
+          <h2>3) 首条只读命令</h2>
+          <pre><code>roswire --profile studio interface print --json
+roswire --profile studio ip route print --json</code></pre>
+        </article>
+      </section>
+
+      <section id="demo" class="demo-section" aria-label="工作原理演示">
+        <header class="demo-heading">
+          <h2>交互式 3D 工作原理演示</h2>
+          <p>
+            通过可切换阶段的 3D 拓扑，直观理解
+            <code>Agent → CLI → Schema/Profile → Protocol → RouterOS → stdout/stderr</code>。
+          </p>
+        </header>
+
+        <div class="demo-grid">
+          <section class="scene-card" aria-label="3D 演示场景">
+          <canvas id="demo-canvas" aria-label="roswire 3D 演示画布"></canvas>
+
+          <div class="hud" aria-live="polite">
+            <div class="hud-top">
+              <span class="live-dot" aria-hidden="true"></span>
+              <span id="hud-stage-id">Stage 1</span>
+            </div>
+            <strong id="hud-stage-title">Agent 发起请求</strong>
+          </div>
+
+          <div id="stage-nav" class="stage-nav" role="tablist" aria-label="演示阶段"></div>
+          </section>
+
+          <aside class="info-card" aria-label="阶段详情">
+            <h2 id="panel-title">Agent 发起请求</h2>
+            <p id="panel-description">
+              Agent 触发 roswire 命令，输入以机器可读 JSON 为核心。
+            </p>
+
+            <section class="panel-section">
+              <h3>示例命令</h3>
+              <pre><code id="panel-command">roswire --json commands</code></pre>
+            </section>
+
+            <section class="panel-section">
+              <h3>安全语义</h3>
+              <ul id="panel-notes" class="notes-list"></ul>
+            </section>
+
+            <section class="panel-section legend">
+              <h3>图例</h3>
+              <ul id="legend-list" class="legend-list" aria-label="节点颜色图例"></ul>
+            </section>
+          </aside>
+        </div>
+      </section>
+
+      <footer class="site-footer">
+        <p>
+          roswire · Built for agents, scripts, and predictable RouterOS operations.
+          <a href="./installation.html">安装指南</a>
+          · <a href="./production-readiness.html">生产门槛</a>
+          ·
+          <a href="./release.md">发布流程</a>
+          · <a href="./feature-checklist.md">功能清单</a>
+        </p>
+      </footer>
+    </div>
+
+    <noscript>
+      <p class="noscript-tip">
+        该演示需要 JavaScript 才能运行 Three.js 动画。请开启 JavaScript 后刷新页面。
+      </p>
+    </noscript>
+
+    <script type="module" src="./assets/app.js"></script>
+  </body>
+</html>

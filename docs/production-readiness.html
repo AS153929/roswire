@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="roswire 生产就绪门槛：MVP/Beta 到 production-stable 的 P0 blocker、质量门、兼容性门槛与安全要求。"
+    />
+    <title>roswire · 生产就绪门槛</title>
+    <link rel="stylesheet" href="./assets/styles.css?v=20260522d" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="site-header">
+        <a class="brand" href="./index.html">
+          <span class="brand-main">
+            <span class="brand-dot" aria-hidden="true"></span>
+            <span class="brand-name">roswire</span>
+          </span>
+          <span class="brand-subtitle">JSON-first RouterOS Bridge</span>
+        </a>
+
+        <nav class="top-nav" aria-label="页面导航">
+          <a href="./index.html">主页</a>
+          <a href="./index.html#overview">概览</a>
+          <a href="./installation.html">安装指南</a>
+          <a href="./index.html#demo">3D 演示</a>
+        </nav>
+
+        <a class="header-cta" href="https://github.com/AS153929/roswire/issues" target="_blank" rel="noreferrer">Issues</a>
+      </header>
+
+      <main class="doc-page">
+        <section class="doc-hero">
+          <p class="badge">Production Gate</p>
+          <h1>roswire 生产级稳定版验收门槛</h1>
+          <p>
+            当前项目可归类为 MVP / Beta 候选；在 P0 blocker 完成前，不应对外声明为 production-stable。
+          </p>
+          <p class="doc-meta">文档版本基于 `docs/production-readiness.md`，更新日期：2026-05-18。</p>
+          <div class="doc-actions">
+            <a class="btn secondary" href="./production-readiness.md">查看 Markdown 原文</a>
+            <a class="btn ghost" href="./index.html">返回主页</a>
+          </div>
+        </section>
+
+        <section class="doc-grid">
+          <article class="doc-card">
+            <h2>状态边界</h2>
+            <ul>
+              <li><strong>MVP：</strong>核心 JSON-first、配置、协议路由、文件工作流闭环。</li>
+              <li><strong>Beta：</strong>可实验室/非关键环境试用，不建议无人值守生产变更。</li>
+              <li><strong>Production-stable：</strong>本页所有 P0 blocker 全部关闭且可追溯。</li>
+            </ul>
+          </article>
+
+          <article class="doc-card">
+            <h2>P0 Blocker（未清零即不稳定版）</h2>
+            <ul>
+              <li><a href="https://github.com/AS153929/roswire/issues/60" target="_blank" rel="noreferrer">#60 RouterOS 真机 / CHR 验收矩阵</a></li>
+              <li><a href="https://github.com/AS153929/roswire/issues/61" target="_blank" rel="noreferrer">#61 发布工程与安装文档</a></li>
+              <li><a href="https://github.com/AS153929/roswire/issues/62" target="_blank" rel="noreferrer">#62 多平台 keychain smoke</a></li>
+            </ul>
+            <div class="doc-note">截至当前：#60 仍是生产级声明的主要阻塞项。</div>
+          </article>
+
+          <article class="doc-card">
+            <h2>发布前质量门（必须全部通过）</h2>
+            <pre><code>cargo fmt --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-features
+cargo llvm-cov --workspace --all-features --summary-only --fail-under-lines 85
+cargo build --release</code></pre>
+          </article>
+
+          <article class="doc-card">
+            <h2>兼容性验收重点</h2>
+            <ul>
+              <li>RouterOS v6/v7：原生 API 行为一致性与错误归一化。</li>
+              <li>v7 REST：GET/PUT/PATCH/DELETE/POST 映射及错误模型。</li>
+              <li><code>--protocol auto</code>：REST 优先 + API fallback 策略可复现。</li>
+              <li>SSH 传输链路：host key 校验、SFTP/SCP fallback、cleanup 路径。</li>
+            </ul>
+          </article>
+
+          <article class="doc-card">
+            <h2>安全门槛（不得放宽）</h2>
+            <ul>
+              <li>默认非交互；不新增密码/确认提示。</li>
+              <li>成功仅写 stdout；错误/诊断仅写 stderr。</li>
+              <li>敏感信息（password/token/secret/key/passphrase）必须脱敏。</li>
+              <li>未知 SSH host key 不得自动信任。</li>
+              <li>keychain 不可用时返回结构化错误，不回退明文。</li>
+            </ul>
+          </article>
+
+          <article class="doc-card">
+            <h2>Go / No-Go 快速核对</h2>
+            <ul>
+              <li>✅ #61 已闭环（发布工程与安装文档）</li>
+              <li>✅ #62 已闭环（keychain smoke / fallback）</li>
+              <li>⏳ #60 需补全真实 RouterOS / CHR 记录</li>
+              <li>⏳ README 与 feature checklist 的生产措辞需持续对齐</li>
+            </ul>
+          </article>
+        </section>
+      </main>
+
+      <footer class="site-footer">
+        <p>
+          生产就绪门槛 · <a href="./index.html">返回主页</a> · <a href="./installation.html">安装指南</a>
+        </p>
+      </footer>
+    </div>
+  </body>
+</html>

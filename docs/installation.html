@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="roswire 安装指南：Linux 快速安装、Cargo 安装、平台产物选择、最小配置和校验步骤。"
+    />
+    <title>roswire · 安装指南</title>
+    <link rel="stylesheet" href="./assets/styles.css?v=20260522d" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="site-header">
+        <a class="brand" href="./index.html">
+          <span class="brand-main">
+            <span class="brand-dot" aria-hidden="true"></span>
+            <span class="brand-name">roswire</span>
+          </span>
+          <span class="brand-subtitle">JSON-first RouterOS Bridge</span>
+        </a>
+
+        <nav class="top-nav" aria-label="页面导航">
+          <a href="./index.html">主页</a>
+          <a href="./index.html#quickstart">快速开始</a>
+          <a href="./index.html#demo">3D 演示</a>
+          <a href="./production-readiness.html">生产门槛</a>
+        </nav>
+
+        <a class="header-cta" href="https://github.com/AS153929/roswire" target="_blank" rel="noreferrer">GitHub</a>
+      </header>
+
+      <main class="doc-page">
+        <section class="doc-hero">
+          <p class="badge">Guide</p>
+          <h1>安装 roswire</h1>
+          <p>
+            目标：在最短路径内拿到可运行的 `roswire` 二进制，并完成首轮本机诊断与最小 profile 配置。
+          </p>
+          <p class="doc-meta">文档版本基于 `docs/installation.md`，更新日期：2026-05-19。</p>
+          <div class="doc-actions">
+            <a class="btn secondary" href="./installation.md">查看 Markdown 原文</a>
+            <a class="btn ghost" href="./index.html#quickstart">回到快速开始</a>
+          </div>
+        </section>
+
+        <section class="doc-grid">
+          <article class="doc-card">
+            <h2>Linux 快速安装（推荐）</h2>
+            <p>一行命令下载 release、校验 checksums 并安装到 PATH。</p>
+            <pre><code>curl -fsSL https://raw.githubusercontent.com/AS153929/roswire/main/scripts/install.sh | sh
+roswire doctor --json</code></pre>
+            <div class="doc-note">`doctor --json` 默认只检查本机环境，不会主动连接 RouterOS。</div>
+          </article>
+
+          <article class="doc-card">
+            <h2>安装脚本可调参数</h2>
+            <table>
+              <thead>
+                <tr>
+                  <th>变量</th>
+                  <th>用途</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>ROSWIRE_VERSION</code></td>
+                  <td>指定 release tag（例如 <code>v0.0.3</code>）</td>
+                </tr>
+                <tr>
+                  <td><code>ROSWIRE_INSTALL_DIR</code></td>
+                  <td>指定安装目录（默认 <code>/usr/local/bin</code>）</td>
+                </tr>
+                <tr>
+                  <td><code>ROSWIRE_REPO</code></td>
+                  <td>指定 GitHub 仓库（默认 <code>AS153929/roswire</code>）</td>
+                </tr>
+                <tr>
+                  <td><code>ROSWIRE_VERIFY=0</code></td>
+                  <td>跳过 SHA256 校验（不推荐）</td>
+                </tr>
+              </tbody>
+            </table>
+          </article>
+
+          <article class="doc-card">
+            <h2>Cargo / 源码安装</h2>
+            <p>适用于 macOS 或希望从源码构建当前分支的场景。</p>
+            <pre><code>cargo install roswire --locked
+# 或
+cargo install --git https://github.com/AS153929/roswire --locked
+# 或（本地仓库）
+cargo install --path . --locked</code></pre>
+          </article>
+
+          <article class="doc-card">
+            <h2>Release 产物命名</h2>
+            <table>
+              <thead>
+                <tr>
+                  <th>平台</th>
+                  <th>文件</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Linux x86_64</td>
+                  <td><code>roswire-linux-amd64.tar.gz</code></td>
+                </tr>
+                <tr>
+                  <td>Linux arm64</td>
+                  <td><code>roswire-linux-arm64.tar.gz</code></td>
+                </tr>
+                <tr>
+                  <td>Windows x86_64</td>
+                  <td><code>roswire-windows-amd64.zip</code></td>
+                </tr>
+                <tr>
+                  <td>校验文件</td>
+                  <td><code>checksums.txt</code></td>
+                </tr>
+              </tbody>
+            </table>
+          </article>
+
+          <article class="doc-card">
+            <h2>最小配置示例</h2>
+            <pre><code>export ROSWIRE_STUDIO_PASSWORD="replace-with-secret"
+roswire config init --json
+roswire config device add studio host=192.168.88.1 user=admin protocol=auto transfer=ssh --json
+roswire config secret set studio password type=env env=ROSWIRE_STUDIO_PASSWORD --json
+roswire --profile studio interface print --json</code></pre>
+            <div class="doc-note">建议优先使用 keychain/env secret 引用，不把密码明文写入命令行历史。</div>
+          </article>
+
+          <article class="doc-card">
+            <h2>常见注意事项</h2>
+            <ul>
+              <li>macOS 目前建议通过源码安装获取本机二进制。</li>
+              <li>文件传输（upload/download）需要 SSH host key 指纹配置。</li>
+              <li>生产前请执行 release checksums 校验，不要跳过完整性验证。</li>
+              <li>卸载二进制不会自动删除系统 keychain 中的凭据。</li>
+            </ul>
+          </article>
+        </section>
+      </main>
+
+      <footer class="site-footer">
+        <p>
+          roswire 安装指南 · <a href="./index.html">返回主页</a> · <a href="./production-readiness.html">生产就绪门槛</a>
+        </p>
+      </footer>
+    </div>
+  </body>
+</html>
