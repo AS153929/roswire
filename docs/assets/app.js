@@ -316,8 +316,8 @@ if (!canvas) {
 }
 
 if (!hasWebGL()) {
-  throw new Error("当前浏览器不支持 WebGL，无法播放 3D 演示");
-}
+  renderStaticFallback();
+} else {
 
 const renderer = new THREE.WebGLRenderer({
   canvas,
@@ -1076,6 +1076,7 @@ function roundRect(ctx, x, y, width, height, radius) {
   ctx.quadraticCurveTo(x, y, x + r, y);
   ctx.closePath();
 }
+}
 
 function hasWebGL() {
   try {
@@ -1083,5 +1084,82 @@ function hasWebGL() {
     return Boolean(testCanvas.getContext("webgl2") || testCanvas.getContext("webgl"));
   } catch {
     return false;
+  }
+}
+
+function renderStaticFallback() {
+  canvas.classList.add("is-hidden");
+  canvas.setAttribute("aria-hidden", "true");
+
+  const fallback = document.createElement("div");
+  fallback.className = "canvas-fallback";
+  fallback.setAttribute("role", "status");
+  const fallbackTitle = document.createElement("strong");
+  fallbackTitle.textContent = "3D 演示当前不可用";
+  const fallbackMessage = document.createElement("span");
+  fallbackMessage.textContent = "当前浏览器或运行环境未提供 WebGL，已切换为静态阶段说明。";
+  fallback.append(fallbackTitle, fallbackMessage);
+  canvas.insertAdjacentElement("afterend", fallback);
+
+  const navButtons = STAGES.map((stage, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "stage-btn";
+    button.setAttribute("role", "tab");
+    button.textContent = `${index + 1}. ${stage.short}`;
+    button.addEventListener("click", () => {
+      applyStaticStage(index);
+    });
+    stageNav.appendChild(button);
+    return button;
+  });
+
+  function applyStaticStage(index) {
+    const stage = STAGES[index];
+
+    hudStageId.textContent = stage.id;
+    hudStageTitle.textContent = stage.title;
+    panelTitle.textContent = stage.title;
+    panelDescription.textContent = stage.description;
+    panelCommand.textContent = stage.command;
+
+    panelNotes.innerHTML = "";
+    stage.notes.forEach((note) => {
+      const li = document.createElement("li");
+      li.textContent = note;
+      panelNotes.appendChild(li);
+    });
+
+    navButtons.forEach((btn, buttonIndex) => {
+      btn.classList.toggle("active", buttonIndex === index);
+      btn.setAttribute("aria-selected", buttonIndex === index ? "true" : "false");
+    });
+  }
+
+  renderStaticLegend();
+  applyStaticStage(0);
+}
+
+function renderStaticLegend() {
+  if (!legendList) {
+    return;
+  }
+
+  legendList.innerHTML = "";
+
+  for (const def of NODE_DEFINITIONS) {
+    const item = document.createElement("li");
+
+    const swatch = document.createElement("span");
+    const color = `#${(def.accent ?? def.color).toString(16).padStart(6, "0")}`;
+    swatch.className = "swatch";
+    swatch.style.background = color;
+    swatch.style.boxShadow = `0 0 14px ${color}B8`;
+
+    const text = document.createElement("span");
+    text.textContent = def.label;
+
+    item.append(swatch, text);
+    legendList.appendChild(item);
   }
 }

@@ -345,6 +345,32 @@ pre {
     radial-gradient(circle at 50% 18%, rgba(34, 238, 214, 0.08), transparent 40%);
 }
 
+#demo-canvas.is-hidden {
+  display: none;
+}
+
+.canvas-fallback {
+  display: grid;
+  align-content: center;
+  gap: 0.55rem;
+  min-height: min(70vh, 760px);
+  padding: 7rem 1.25rem 6.5rem;
+  color: #d9e4ff;
+  background:
+    linear-gradient(180deg, rgba(32, 49, 82, 0.2), rgba(8, 13, 22, 0.85)),
+    radial-gradient(circle at 50% 20%, rgba(34, 238, 214, 0.13), transparent 42%);
+}
+
+.canvas-fallback strong {
+  font-size: clamp(1.2rem, 2vw, 1.65rem);
+}
+
+.canvas-fallback span {
+  max-width: 34rem;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
 .hud {
   pointer-events: none;
   position: absolute;
