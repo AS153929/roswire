@@ -669,6 +669,10 @@ td {
   .stage-nav {
     grid-template-columns: 1fr;
   }
+
+  .canvas-fallback {
+    padding-bottom: 18rem;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
