@@ -29,7 +29,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          token: ''
           persist-credentials: false
 
       - name: Initialize CodeQL
