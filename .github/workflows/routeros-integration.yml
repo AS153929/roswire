@@ -1,0 +1,102 @@
+name: RouterOS Integration
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  routeros-docker:
+    name: docker-routeros-readonly
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      ROUTEROS_IMAGE: evilfreelancer/docker-routeros:latest
+      ROUTEROS_CONTAINER: roswire-routeros
+      ROUTEROS_HOST: 127.0.0.1
+      ROUTEROS_API_PORT: "8728"
+      ROUTEROS_SSH_PORT: "2222"
+      ROUTEROS_TELNET_PORT: "2223"
+      ROUTEROS_PASSWORD: ""
+      ROSWIRE_ROUTEROS_CI_OUT: target/routeros-ci
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: routeros-integration
+
+      - name: Build roswire
+        run: cargo build --locked
+
+      - name: Prepare Docker virtualization devices
+        run: |
+          sudo modprobe tun || true
+          if [ -e /dev/kvm ]; then
+            echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+            sudo udevadm control --reload-rules
+            sudo udevadm trigger --name-match=kvm || true
+            sudo chmod 666 /dev/kvm || true
+          fi
+
+      - name: Start RouterOS CHR
+        run: |
+          mkdir -p target/routeros-ci
+          docker pull "$ROUTEROS_IMAGE"
+
+          {
+            cat <<'YAML'
+          services:
+            routeros:
+              image: ${ROUTEROS_IMAGE}
+              container_name: ${ROUTEROS_CONTAINER}
+              restart: "no"
+              cap_add:
+                - NET_ADMIN
+              devices:
+                - /dev/net/tun:/dev/net/tun
+          YAML
+            if [ -e /dev/kvm ]; then
+              printf '      - /dev/kvm:/dev/kvm\n'
+            fi
+            cat <<'YAML'
+              ports:
+                - "${ROUTEROS_SSH_PORT}:22"
+                - "${ROUTEROS_TELNET_PORT}:23"
+                - "${ROUTEROS_API_PORT}:8728"
+                - "8729:8729"
+              networks:
+                - default
+                - routeros_net
+          networks:
+            routeros_net:
+              driver: bridge
+          YAML
+          } > target/routeros-ci/docker-compose.routeros.yml
+
+          docker compose -f target/routeros-ci/docker-compose.routeros.yml up -d
+          docker ps -a
+
+      - name: Run read-only RouterOS integration
+        env:
+          ROSWIRE_BIN: ./target/debug/roswire
+          ROUTEROS_USER: admin
+        run: scripts/routeros-ci-integration.sh
+
+      - name: RouterOS logs
+        if: always()
+        run: |
+          mkdir -p target/routeros-ci
+          docker logs "$ROUTEROS_CONTAINER" > target/routeros-ci/docker-routeros.log 2>&1 || true
+
+      - name: Upload RouterOS integration evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: routeros-integration-evidence
+          path: target/routeros-ci
+          if-no-files-found: ignore
