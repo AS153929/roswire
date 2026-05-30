@@ -63,6 +63,22 @@ jobs:
         if: ${{ matrix.use_cross }}
         run: "cross build --release --locked --target ${{ matrix.target }}"
 
+      - name: Install UPX
+        if: runner.os == 'Linux'
+        uses: crazy-max/ghaction-upx@v4
+        with:
+          install-only: true
+
+      - name: Compress Linux binary with UPX
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin="target/${{ matrix.target }}/release/roswire"
+          ls -lh "$bin"
+          upx --best --lzma "$bin"
+          ls -lh "$bin"
+
       - name: Smoke test release binary (Unix)
         if: ${{ runner.os != 'Windows' && matrix.smoke }}
         shell: bash

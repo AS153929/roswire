@@ -64,7 +64,7 @@ Release 产物命名约定：
 | Windows x86_64 | `roswire-windows-amd64.zip` |
 | 校验和 | `checksums.txt` |
 
-Linux 归档内的 `roswire` 是 musl 静态链接二进制，适合 glibc 版本较旧或没有 glibc 的发行环境。
+Linux 归档内的 `roswire` 是 musl 静态链接二进制，适合 glibc 版本较旧或没有 glibc 的发行环境。Release workflow 会对 Linux 二进制做 UPX 压缩以降低下载和落盘体积。
 
 macOS 预编译产物暂不发布；macOS 用户请先按“从源码安装”构建本机二进制。
 

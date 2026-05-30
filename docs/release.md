@@ -20,7 +20,7 @@
 | `roswire-linux-arm64` | `ubuntu-latest` | `aarch64-unknown-linux-musl` | `.tar.gz` |
 | `roswire-windows-amd64` | `windows-latest` | `x86_64-pc-windows-msvc` | `.zip` |
 
-Linux release 产物使用 musl 静态目标，不依赖目标机器的 glibc。Linux 构建通过 `cross` 运行，因为 `ssh2` / OpenSSL / zlib / ring 包含 C 依赖，普通 Rust target 安装不足以稳定完成 musl 交叉编译。
+Linux release 产物使用 musl 静态目标，不依赖目标机器的 glibc。Linux 构建通过 `cross` 运行，因为 `ssh2` / OpenSSL / zlib / ring 包含 C 依赖，普通 Rust target 安装不足以稳定完成 musl 交叉编译。Linux 二进制在 smoke test 和打包前使用 UPX 压缩；如果后续发现某个安全环境误报或禁止 UPX，可在 release workflow 中移除 `Compress Linux binary with UPX` 步骤后重新发布。
 
 每个可执行平台构建后都会执行：
 
