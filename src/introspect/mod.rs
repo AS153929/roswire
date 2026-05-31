@@ -903,7 +903,7 @@ fn catalog() -> Vec<CommandDefinition> {
         },
         CommandDefinition {
             name: "schema discover".to_owned(),
-            summary: "Discover remote schema overlay with cache TTL metadata.".to_owned(),
+            summary: "Return a degraded static schema snapshot (remote device probing not yet implemented).".to_owned(),
             kind: "introspection".to_owned(),
             syntax: "roswire schema discover --remote [--refresh] --json".to_owned(),
             arguments: vec![
@@ -912,7 +912,7 @@ fn catalog() -> Vec<CommandDefinition> {
                     style: "flag".to_owned(),
                     required: true,
                     arg_type: "bool".to_owned(),
-                    description: "Enable remote schema discovery.".to_owned(),
+                    description: "Request the remote snapshot. Currently returns a degraded static snapshot; live device probing is not yet implemented.".to_owned(),
                     example: Some("--remote".to_owned()),
                 },
                 ArgumentSpec {
@@ -920,7 +920,7 @@ fn catalog() -> Vec<CommandDefinition> {
                     style: "flag".to_owned(),
                     required: false,
                     arg_type: "bool".to_owned(),
-                    description: "Bypass cached remote schema metadata and mark the cache status as refresh.".to_owned(),
+                    description: "Mark the cache status as refresh. On-disk schema caching is not yet implemented, so this is currently a status marker only.".to_owned(),
                     example: Some("--refresh".to_owned()),
                 },
             ],

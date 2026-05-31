@@ -116,11 +116,11 @@ pub struct Cli {
     #[arg(long)]
     pub debug: bool,
 
-    /// Enable remote capability/schema probing for introspection commands.
+    /// Request remote snapshot for introspection commands. Currently returns a degraded static snapshot; live device probing is not yet implemented.
     #[arg(long)]
     pub remote: bool,
 
-    /// Force remote schema discovery to bypass cached schema metadata.
+    /// Mark the remote schema cache status as refresh. On-disk schema caching is not yet implemented, so this is currently a status marker only.
     #[arg(long)]
     pub refresh: bool,
 

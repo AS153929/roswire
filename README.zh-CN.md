@@ -394,11 +394,12 @@ flowchart TD
 
 ## 开发路线
 
-实现计划记录在 [`docs/develop-plan.md`](docs/develop-plan.md)。当前优先级如下：
+实现计划记录在 [`docs/develop-plan.md`](docs/develop-plan.md)。核心里程碑状态如下：
 
-1. Rust 项目脚手架与 CLI 解析。
-1. 稳定 JSON 错误模型与输出流隔离。
-1. 首次连接探测、协议优先级与自动路由。
-1. RouterOS 原生 API 共享传输层与 v6/v7 方言实现。
-1. RouterOS v7 REST 协议实现。
-1. 基于 RouterOS CHR 或专用测试设备的集成测试。
+1. ✅ Rust 项目脚手架与 CLI 解析。
+1. ✅ 稳定 JSON 错误模型与输出流隔离。
+1. ✅ 首次连接探测、协议优先级与自动路由。
+1. ✅ RouterOS 原生 API 共享传输层与 v6/v7 方言实现。
+1. ✅ RouterOS v7 REST 协议实现。
+1. 🚧 基于 RouterOS CHR 或专用测试设备的集成测试（已有手动触发的只读冒烟 harness，更全面的真机覆盖进行中）。
+1. 📋 路线图（尚未实现）：真实远端 schema/能力探测与落盘 schema 缓存（`--remote` 当前返回 degraded 静态快照——见上文「Agent 自描述 API」一节）。

@@ -641,12 +641,14 @@ pub struct ErrorContext {
 | `SERIALIZATION_ERROR` | JSON 编解码失败 | `5` |
 | `HELP_TOPIC_NOT_FOUND` | 请求的帮助主题或命令不存在 | `2` |
 | `SCHEMA_UNAVAILABLE` | 请求的命令 schema 尚未登记 | `2` |
-| `REMOTE_SCHEMA_UNAVAILABLE` | 远端 schema 或能力覆盖不可用，只能使用静态目录 | `2` |
-| `CAPABILITY_PROBE_FAILED` | 远端只读能力探测失败，输出已降级 | `1` |
-| `REMOTE_SCHEMA_STALE` | 本地远端 schema 缓存已过期或与设备指纹不匹配 | `2` |
+| `REMOTE_SCHEMA_UNAVAILABLE` | 远端 schema 或能力覆盖不可用，只能使用静态目录（当前用于拒绝 `commands --remote`） | `2` |
+| `CAPABILITY_PROBE_FAILED` | 远端只读能力探测失败，输出已降级（**路线图：远端探测未实现，当前不会发射此码**） | `1` |
+| `REMOTE_SCHEMA_STALE` | 本地远端 schema 缓存已过期或与设备指纹不匹配（**路线图：落盘缓存未实现，当前不会发射此码**） | `2` |
 | `INTERNAL_ERROR` | 未预期内部错误 | `5` |
 
 ## 6. 模块划分
+
+> **实现状态说明（2026-05）：** 下面是**目标态模块架构**，与当前实际 `src/` 布局存在差异，落地前不应据此假设文件存在。例如 `introspect/` 的 catalog/help/schema 目前仍合并在 `introspect/mod.rs`，`discovery.rs`/`cache.rs` 已存在但只服务于 degraded 静态快照（远端探测与落盘缓存未实现，见上文 remote schema 状态说明）；不存在独立的 `workflow/` 目录，跨协议文件编排位于 `transfer/`（已按 command/plan/policy/ssh_data/ssh_service/workflow 子模块拆分，#145）。本节保留为重构方向，不代表现状。
 
 ```text
 src/
