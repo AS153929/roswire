@@ -415,6 +415,11 @@ fn resolve_profile_secret_value_recursive(
         SecretSpec::Keychain { service, account } => Some(read_keychain_secret(service, account)?),
         SecretSpec::Env { var } => Some(read_env_secret(env, var)?),
         SecretSpec::SameAs { target } => {
+            if !profile.secrets.contains_key(target) {
+                return Err(Box::new(RosWireError::config(format!(
+                    "secret target missing: {target}",
+                ))));
+            }
             resolve_profile_secret_value_recursive(profile, target, env, visiting)?
         }
     };
@@ -1668,6 +1673,28 @@ retention_days = 7
 
         let error = resolve_profile_secrets(&profile).expect_err("cycle should fail");
         assert!(has_error_code(&error, ErrorCode::ConfigError));
+    }
+
+    #[test]
+    fn same_as_missing_target_is_consistent_between_resolvers() {
+        let profile = ProfileConfig {
+            allow_plain_secrets: true,
+            secrets: BTreeMap::from([(
+                "ssh_password".to_owned(),
+                SecretSpec::SameAs {
+                    target: "password".to_owned(),
+                },
+            )]),
+            ..ProfileConfig::default()
+        };
+
+        let inspect_error =
+            resolve_profile_secrets(&profile).expect_err("inspect should reject missing target");
+        assert!(has_error_code(&inspect_error, ErrorCode::ConfigError));
+
+        let value_error = resolve_profile_secret_value(&profile, "ssh_password", &BTreeMap::new())
+            .expect_err("value resolver should reject missing same-as target");
+        assert!(has_error_code(&value_error, ErrorCode::ConfigError));
     }
 
     #[test]
