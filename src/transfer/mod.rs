@@ -928,11 +928,11 @@ fn execute_generated_download_workflow<B: WorkflowBackend>(
     }
 
     backend.execute_control(&spec.control, context)?;
-    retry_transfer_step(policy, || {
-        backend.wait_remote_file(&spec.remote, policy.wait_timeout(), context)
-    })?;
+    backend.wait_remote_file(&spec.remote, policy.wait_timeout(), context)?;
 
-    let (bytes, checksum_sha256) = match backend.download(&spec.remote, &tmp_local, context) {
+    let (bytes, checksum_sha256) = match retry_transfer_step(policy, || {
+        backend.download(&spec.remote, &tmp_local, context)
+    }) {
         Ok(result) => result,
         Err(error) => {
             let _ = backend.remove_local_file(&tmp_local, context);
@@ -3789,7 +3789,83 @@ value = "profile-phrase"
     }
 
     #[test]
-    fn generated_download_wait_uses_finite_retry_policy() {
+    fn generated_download_wait_is_not_retried_by_transfer_policy() {
+        let cli = Cli::try_parse_from([
+            "roswire",
+            "backup",
+            "download",
+            "backup.backup",
+            "--retries",
+            "3",
+            "--retry-delay-seconds",
+            "0",
+        ])
+        .expect("cli should parse");
+        let policy = transfer_policy(&cli).expect("policy should parse");
+        let command = parse_transfer_command(&cli.tokens)
+            .expect("transfer command should be detected")
+            .expect("transfer command should parse");
+        let mut backend = FakeWorkflowBackend {
+            fail_wait: true,
+            ..FakeWorkflowBackend::default()
+        };
+
+        let error = execute_file_workflow(
+            &command,
+            &cli,
+            &[],
+            &policy,
+            &mut backend,
+            &workflow_context("backup/download"),
+        )
+        .expect_err("wait timeout should propagate without retry amplification");
+
+        assert_eq!(error.error_code, ErrorCode::RosApiFailure);
+        assert_eq!(
+            backend
+                .events
+                .iter()
+                .filter(|event| event.as_str() == "wait:roswire-backup.backup")
+                .count(),
+            1,
+            "wait already self-loops to timeout; it must not be retried: {:?}",
+            backend.events,
+        );
+    }
+
+    #[test]
+    fn generated_download_wait_runs_once_on_success() {
+        let cli = Cli::try_parse_from(["roswire", "backup", "download", "backup.backup"])
+            .expect("cli should parse");
+        let policy = transfer_policy(&cli).expect("policy should parse");
+        let command = parse_transfer_command(&cli.tokens)
+            .expect("transfer command should be detected")
+            .expect("transfer command should parse");
+        let mut backend = FakeWorkflowBackend::default();
+
+        let payload = execute_file_workflow(
+            &command,
+            &cli,
+            &[],
+            &policy,
+            &mut backend,
+            &workflow_context("backup/download"),
+        )
+        .expect("download should succeed");
+
+        assert_eq!(payload.status, "ok");
+        assert_eq!(
+            backend
+                .events
+                .iter()
+                .filter(|event| event.as_str() == "wait:roswire-backup.backup")
+                .count(),
+            1,
+        );
+    }
+
+    #[test]
+    fn generated_download_retries_transient_download_failure() {
         let cli = Cli::try_parse_from([
             "roswire",
             "backup",
@@ -3806,7 +3882,7 @@ value = "profile-phrase"
             .expect("transfer command should be detected")
             .expect("transfer command should parse");
         let mut backend = FakeWorkflowBackend {
-            wait_failures_remaining: 1,
+            download_failures_remaining: 1,
             ..FakeWorkflowBackend::default()
         };
 
@@ -3818,16 +3894,26 @@ value = "profile-phrase"
             &mut backend,
             &workflow_context("backup/download"),
         )
-        .expect("transient wait failure should be retried");
+        .expect("transient download failure should be retried");
 
         assert_eq!(payload.status, "ok");
         assert_eq!(
             backend
                 .events
                 .iter()
+                .filter(|event| event.starts_with("download:"))
+                .count(),
+            2,
+            "download should be retried once: {:?}",
+            backend.events,
+        );
+        assert_eq!(
+            backend
+                .events
+                .iter()
                 .filter(|event| event.as_str() == "wait:roswire-backup.backup")
                 .count(),
-            2
+            1,
         );
     }
 
@@ -4234,6 +4320,7 @@ value = "profile-secret"
         fail_download: bool,
         fail_finalize: bool,
         materialize_download: bool,
+        download_failures_remaining: usize,
         ssh_snapshot: SshServiceSnapshot,
         ssh_apply_count: usize,
         fail_ssh_apply_on: Option<usize>,
@@ -4287,6 +4374,15 @@ value = "profile-secret"
             self.events.push(format!("download:{remote}->{local}"));
             if self.materialize_download {
                 fs::write(local, b"partial-download").expect("part file should be writable");
+            }
+            if self.download_failures_remaining > 0 {
+                self.download_failures_remaining -= 1;
+                return Err(Box::new(
+                    crate::error::RosWireError::file_transfer_failed(format!(
+                        "transient download failure for {remote}"
+                    ))
+                    .with_context(context.clone()),
+                ));
             }
             if self.fail_download {
                 return Err(Box::new(
