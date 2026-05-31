@@ -1,0 +1,13 @@
+{
+  "name": "roswire",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "dev",
+  "workspaceFolder": "/workspaces/roswire",
+  "runServices": ["dev"],
+  "customizations": {
+    "vscode": {
+      "extensions": ["rust-lang.rust-analyzer", "tamasfe.even-better-toml"]
+    }
+  },
+  "postCreateCommand": "rustup component add clippy rustfmt >/dev/null 2>&1 || true; cargo fetch || true"
+}

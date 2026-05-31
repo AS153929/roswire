@@ -401,5 +401,5 @@ The implementation plan lives in [`docs/develop-plan.md`](docs/develop-plan.md).
 1. ✅ First-connection probing, protocol precedence, and automatic routing.
 1. ✅ RouterOS native API shared transport plus v6/v7 dialects.
 1. ✅ RouterOS v7 REST protocol implementation.
-1. 🚧 Integration tests using RouterOS CHR or dedicated test devices (manual-trigger smoke harness exists; broader live coverage in progress).
+1. 🚧 Integration tests using RouterOS CHR or dedicated test devices (manual-trigger smoke harness exists; a local devcontainer + CHR sidecar loop is documented in [`docs/routeros-local-integration.md`](docs/routeros-local-integration.md); broader live coverage in progress).
 1. 📋 Roadmap (not yet implemented): live remote schema/capability probing and on-disk schema cache (`--remote` currently returns a degraded static snapshot — see [Agent self-description APIs](#agent-self-description-apis)).

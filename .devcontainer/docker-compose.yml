@@ -1,0 +1,50 @@
+# Dev container + optional RouterOS CHR sidecar for local read-only integration.
+#
+# The `routeros` service is NOT started automatically (devcontainer.json pins
+# runServices to ["dev"]) because booting QEMU/CHR is slow. Start it on demand:
+#
+#   docker compose -f .devcontainer/docker-compose.yml up -d routeros
+#
+# The CHR image is community-maintained (MikroTik ships no official Docker
+# image, only a CHR disk image that this container wraps in QEMU). It is a
+# multi-arch manifest, so Docker selects the host architecture automatically
+# (arm64 on Apple Silicon) — same-architecture, no cross-arch emulation.
+#
+# Scope: read-only smoke testing only. See docs/routeros-local-integration.md.
+
+services:
+  dev:
+    image: mcr.microsoft.com/devcontainers/rust:1-bookworm
+    command: sleep infinity
+    working_dir: /workspaces/roswire
+    volumes:
+      - ..:/workspaces/roswire:cached
+      - cargo-registry:/usr/local/cargo/registry
+    networks:
+      - routeros_net
+
+  routeros:
+    image: ${ROUTEROS_IMAGE:-evilfreelancer/docker-routeros:latest}
+    container_name: roswire-routeros-dev
+    restart: "no"
+    cap_add:
+      - NET_ADMIN
+    devices:
+      # tun is required by the QEMU-wrapped CHR. /dev/kvm is intentionally not
+      # listed here so the stack still starts on hosts without KVM passthrough
+      # (e.g. colima on Apple Silicon); QEMU falls back to TCG. For the faster
+      # KVM path use `make integration-local`, which injects /dev/kvm when present.
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "127.0.0.1:8728:8728"
+      - "127.0.0.1:8729:8729"
+      - "127.0.0.1:2222:22"
+    networks:
+      - routeros_net
+
+volumes:
+  cargo-registry:
+
+networks:
+  routeros_net:
+    driver: bridge

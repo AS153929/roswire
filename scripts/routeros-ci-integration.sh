@@ -190,6 +190,7 @@ run_case remote-raw-interface-detail --profile "$ROUTEROS_PROFILE" raw /interfac
 assert_stdout_contains remote-raw-interface-detail '"name"'
 
 run_case remote-schema-discover --profile "$ROUTEROS_PROFILE" schema discover --remote --json
-assert_stdout_contains remote-schema-discover '"schema_version": "roswire.remote.schema.v1"'
+assert_stdout_contains remote-schema-discover '"schema_version": "roswire.remote.schema.v2"'
+assert_stdout_contains remote-schema-discover '"degraded": true'
 
 printf 'RouterOS CI integration finished. Evidence: %s\n' "$OUT_DIR"
