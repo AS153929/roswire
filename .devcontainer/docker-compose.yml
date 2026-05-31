@@ -20,6 +20,12 @@ services:
     volumes:
       - ..:/workspaces/roswire:cached
       - cargo-registry:/usr/local/cargo/registry
+      # Isolate build artifacts from the host's target/ dir. The repo is
+      # bind-mounted, so without this the container reuses macOS-built
+      # artifacts and `cargo build` fails ("Permission denied" executing
+      # Mach-O build scripts under Linux). A dedicated volume keeps the
+      # conventional path working for rust-analyzer while staying isolated.
+      - cargo-target:/workspaces/roswire/target
     networks:
       - routeros_net
 
@@ -44,6 +50,7 @@ services:
 
 volumes:
   cargo-registry:
+  cargo-target:
 
 networks:
   routeros_net:
