@@ -91,7 +91,7 @@ pub fn doctor_payload(cli: &Cli) -> RosWireResult<String> {
 
 fn local_doctor(
     cli: &Cli,
-    _env: &BTreeMap<String, String>,
+    env: &BTreeMap<String, String>,
     paths: &ConfigPaths,
 ) -> RosWireResult<(LocalDoctor, Option<ConfigFile>)> {
     let home_exists = paths.home.exists();
@@ -128,7 +128,7 @@ fn local_doctor(
         match config::select_active_profile(cli.profile.as_deref(), config_file) {
             Ok(profile_name) => {
                 if let Some(profile) = config_file.profiles.get(&profile_name) {
-                    match config::resolve_profile_secrets(profile) {
+                    match config::resolve_profile_secrets(profile, env) {
                         Ok(secrets) => secret_status = secrets,
                         Err(error) => warnings.push(error_code_name(error.error_code)),
                     }

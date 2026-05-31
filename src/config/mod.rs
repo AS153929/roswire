@@ -296,12 +296,13 @@ pub fn ensure_secure_file_permissions(path: &Path) -> RosWireResult<()> {
 
 pub fn resolve_profile_secrets(
     profile: &ProfileConfig,
+    env: &BTreeMap<String, String>,
 ) -> RosWireResult<BTreeMap<String, SecretInspectField>> {
     let mut resolved = BTreeMap::new();
     let mut visiting = Vec::new();
 
     for name in profile.secrets.keys() {
-        let field = resolve_secret_recursive(name, profile, &mut resolved, &mut visiting)?;
+        let field = resolve_secret_recursive(name, profile, env, &mut resolved, &mut visiting)?;
         resolved.insert(name.clone(), field);
     }
 
@@ -311,6 +312,7 @@ pub fn resolve_profile_secrets(
 fn resolve_secret_recursive(
     name: &str,
     profile: &ProfileConfig,
+    env: &BTreeMap<String, String>,
     resolved: &mut BTreeMap<String, SecretInspectField>,
     visiting: &mut Vec<String>,
 ) -> RosWireResult<SecretInspectField> {
@@ -346,32 +348,48 @@ fn resolve_secret_recursive(
                 redacted: true,
             }
         }
-        SecretSpec::Encrypted { .. } => SecretInspectField {
-            status: "available".to_owned(),
+        SecretSpec::Encrypted { key_id, .. } => SecretInspectField {
+            // Verify only that the master key is present; never decrypt during inspect.
+            status: availability_status(encrypted_master_key(env, key_id.as_deref()).is_ok()),
             secret_type: "encrypted".to_owned(),
             source: ValueSource::Profile,
             redacted: true,
         },
         SecretSpec::Keychain { .. } => SecretInspectField {
-            status: "available".to_owned(),
+            // Probing the OS keyring is a side effect (may block/prompt and is
+            // platform-dependent), so inspect reports presence as unverified
+            // rather than querying the backend.
+            status: "unverified".to_owned(),
             secret_type: "keychain".to_owned(),
             source: ValueSource::Profile,
             redacted: true,
         },
-        SecretSpec::Env { .. } => SecretInspectField {
-            status: "available".to_owned(),
+        SecretSpec::Env { var } => SecretInspectField {
+            status: availability_status(env_secret_present(env, var)),
             secret_type: "env".to_owned(),
             source: ValueSource::Env,
             redacted: true,
         },
         SecretSpec::SameAs { target } => {
-            resolve_secret_recursive(target, profile, resolved, visiting)?
+            resolve_secret_recursive(target, profile, env, resolved, visiting)?
         }
     };
     visiting.pop();
 
     resolved.insert(name.to_owned(), field.clone());
     Ok(field)
+}
+
+fn availability_status(present: bool) -> String {
+    if present {
+        "available".to_owned()
+    } else {
+        "unavailable".to_owned()
+    }
+}
+
+fn env_secret_present(env: &BTreeMap<String, String>, var: &str) -> bool {
+    env.get(var).is_some_and(|value| !value.is_empty())
 }
 
 pub fn resolve_profile_secret_value(
@@ -648,7 +666,7 @@ fn derive_encryption_key_legacy(master_key: &str) -> [u8; 32] {
 
 pub fn inspect_config(
     cli: &Cli,
-    _env: &BTreeMap<String, String>,
+    env: &BTreeMap<String, String>,
     config: &ConfigFile,
     paths: &ConfigPaths,
 ) -> RosWireResult<ConfigInspect> {
@@ -657,7 +675,7 @@ pub fn inspect_config(
         .profiles
         .get(&active_profile)
         .ok_or_else(|| Box::new(RosWireError::profile_not_found(active_profile.clone())))?;
-    let secrets = resolve_profile_secrets(profile)?;
+    let secrets = resolve_profile_secrets(profile, env)?;
 
     let mut resolved = BTreeMap::new();
     insert_resolved_field(
@@ -1646,7 +1664,8 @@ retention_days = 7
             ..ProfileConfig::default()
         };
 
-        let error = resolve_profile_secrets(&profile).expect_err("plain secret should be blocked");
+        let error = resolve_profile_secrets(&profile, &BTreeMap::new())
+            .expect_err("plain secret should be blocked");
         assert!(has_error_code(&error, ErrorCode::ConfigError));
     }
 
@@ -1671,7 +1690,8 @@ retention_days = 7
             ..ProfileConfig::default()
         };
 
-        let error = resolve_profile_secrets(&profile).expect_err("cycle should fail");
+        let error =
+            resolve_profile_secrets(&profile, &BTreeMap::new()).expect_err("cycle should fail");
         assert!(has_error_code(&error, ErrorCode::ConfigError));
     }
 
@@ -1688,13 +1708,105 @@ retention_days = 7
             ..ProfileConfig::default()
         };
 
-        let inspect_error =
-            resolve_profile_secrets(&profile).expect_err("inspect should reject missing target");
+        let inspect_error = resolve_profile_secrets(&profile, &BTreeMap::new())
+            .expect_err("inspect should reject missing target");
         assert!(has_error_code(&inspect_error, ErrorCode::ConfigError));
 
         let value_error = resolve_profile_secret_value(&profile, "ssh_password", &BTreeMap::new())
             .expect_err("value resolver should reject missing same-as target");
         assert!(has_error_code(&value_error, ErrorCode::ConfigError));
+    }
+
+    #[test]
+    fn inspect_reports_env_secret_availability() {
+        let profile = ProfileConfig {
+            secrets: BTreeMap::from([(
+                "password".to_owned(),
+                SecretSpec::Env {
+                    var: "ROSWIRE_TEST_PASSWORD".to_owned(),
+                },
+            )]),
+            ..ProfileConfig::default()
+        };
+
+        let missing = resolve_profile_secrets(&profile, &BTreeMap::new())
+            .expect("inspect should resolve without the env value present");
+        assert_eq!(
+            missing.get("password").map(|field| field.status.as_str()),
+            Some("unavailable"),
+        );
+
+        let empty = resolve_profile_secrets(
+            &profile,
+            &BTreeMap::from([("ROSWIRE_TEST_PASSWORD".to_owned(), String::new())]),
+        )
+        .expect("inspect should resolve with an empty env value");
+        assert_eq!(
+            empty.get("password").map(|field| field.status.as_str()),
+            Some("unavailable"),
+        );
+
+        let present = resolve_profile_secrets(
+            &profile,
+            &BTreeMap::from([("ROSWIRE_TEST_PASSWORD".to_owned(), "set".to_owned())]),
+        )
+        .expect("inspect should resolve with the env value present");
+        assert_eq!(
+            present.get("password").map(|field| field.status.as_str()),
+            Some("available"),
+        );
+    }
+
+    #[test]
+    fn inspect_reports_encrypted_secret_requires_master_key() {
+        let profile = ProfileConfig {
+            secrets: BTreeMap::from([(
+                "password".to_owned(),
+                SecretSpec::Encrypted {
+                    key_id: None,
+                    value: "v2:600000:c2FsdA==:bm9uY2U=:Y2lwaGVy".to_owned(),
+                },
+            )]),
+            ..ProfileConfig::default()
+        };
+
+        let missing = resolve_profile_secrets(&profile, &BTreeMap::new())
+            .expect("inspect should resolve without the master key present");
+        assert_eq!(
+            missing.get("password").map(|field| field.status.as_str()),
+            Some("unavailable"),
+        );
+
+        let present = resolve_profile_secrets(
+            &profile,
+            &BTreeMap::from([(DEFAULT_MASTER_KEY_ENV.to_owned(), generated_master_key())]),
+        )
+        .expect("inspect should resolve with the master key present");
+        assert_eq!(
+            present.get("password").map(|field| field.status.as_str()),
+            Some("available"),
+        );
+    }
+
+    #[test]
+    fn inspect_reports_keychain_secret_as_unverified() {
+        let profile = ProfileConfig {
+            secrets: BTreeMap::from([(
+                "password".to_owned(),
+                SecretSpec::Keychain {
+                    service: "roswire".to_owned(),
+                    account: "router".to_owned(),
+                },
+            )]),
+            ..ProfileConfig::default()
+        };
+
+        let resolved = resolve_profile_secrets(&profile, &BTreeMap::new())
+            .expect("inspect should resolve keychain secrets without probing the backend");
+        assert_eq!(
+            resolved.get("password").map(|field| field.status.as_str()),
+            Some("unverified"),
+        );
     }
 
     #[test]
@@ -1718,7 +1830,8 @@ retention_days = 7
             ..ProfileConfig::default()
         };
 
-        let resolved = resolve_profile_secrets(&profile).expect("secrets should resolve");
+        let resolved =
+            resolve_profile_secrets(&profile, &BTreeMap::new()).expect("secrets should resolve");
         assert_eq!(
             resolved
                 .get("password")
