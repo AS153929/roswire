@@ -159,13 +159,20 @@ fn parse_response(method: RestMethod, response: ureq::Response) -> RosWireResult
 }
 
 pub fn map_status_error(status: u16, body: String) -> RosWireError {
-    if status == 401 {
-        return RosWireError::auth_failed("RouterOS REST authentication failed");
-    }
+    let detail = routeros_error_message(&body);
+    let with_fallback = |fallback: String| detail.clone().unwrap_or(fallback);
 
-    let message = routeros_error_message(&body)
-        .unwrap_or_else(|| format!("RouterOS REST returned HTTP status {status}"));
-    RosWireError::ros_api_failure(message)
+    match status {
+        401 | 403 => RosWireError::auth_failed(with_fallback(format!(
+            "RouterOS REST authentication failed (HTTP {status})",
+        ))),
+        500..=599 => RosWireError::network(with_fallback(format!(
+            "RouterOS REST server error (HTTP {status})",
+        ))),
+        _ => RosWireError::ros_api_failure(with_fallback(format!(
+            "RouterOS REST returned HTTP status {status}",
+        ))),
+    }
 }
 
 pub fn routeros_error_message(body: &str) -> Option<String> {
@@ -324,9 +331,37 @@ mod tests {
         let auth = map_status_error(401, String::new());
         assert_eq!(auth.error_code, ErrorCode::AuthFailed);
 
+        // 403 (permission) is auth/permission class, not a generic API failure.
+        // In `auto` protocol detection this intentionally short-circuits the probe
+        // (AuthFailed => stop) rather than falling back to another protocol.
+        let forbidden = map_status_error(403, String::new());
+        assert_eq!(forbidden.error_code, ErrorCode::AuthFailed);
+
         let trap = map_status_error(400, r#"{"detail":"invalid interface"}"#.to_owned());
         assert_eq!(trap.error_code, ErrorCode::RosApiFailure);
         assert_eq!(trap.message, "invalid interface");
+
+        // 404 has no dedicated resource code; it stays an API-level failure
+        // (RosApiFailure already documents "target interface/item does not exist").
+        let not_found = map_status_error(404, r#"{"message":"no such item"}"#.to_owned());
+        assert_eq!(not_found.error_code, ErrorCode::RosApiFailure);
+        assert_eq!(not_found.message, "no such item");
+
+        // 5xx is server/network class so `auto` can fall back to another protocol.
+        let server_error = map_status_error(500, String::new());
+        assert_eq!(server_error.error_code, ErrorCode::NetworkError);
+        let bad_gateway = map_status_error(502, String::new());
+        assert_eq!(bad_gateway.error_code, ErrorCode::NetworkError);
+
+        // Out-of-range statuses must not be misclassified as server errors.
+        let out_of_range = map_status_error(600, String::new());
+        assert_eq!(out_of_range.error_code, ErrorCode::RosApiFailure);
+
+        // Body detail is preserved across classes for diagnostics.
+        let server_detail = map_status_error(503, r#"{"detail":"service unavailable"}"#.to_owned());
+        assert_eq!(server_detail.error_code, ErrorCode::NetworkError);
+        assert_eq!(server_detail.message, "service unavailable");
+
         assert_eq!(
             routeros_error_message(r#"{"message":"no such item"}"#).as_deref(),
             Some("no such item"),
