@@ -172,7 +172,13 @@ fn execute_rest(
     selected_protocol: &str,
 ) -> RosWireResult<()> {
     let context = execution_context(invocation, target, selected_protocol);
-    let client = RestClient::https(&target.host, port, &target.user, &target.password);
+    let client = RestClient::https(
+        &target.host,
+        port,
+        &target.user,
+        &target.password,
+        &target.tls_trust(),
+    )?;
     let value = with_context(client.execute_request(request), context)?;
     let payload = render_protocol_payload(request, selected_protocol, &value)?;
     println!("{payload}");
@@ -188,7 +194,12 @@ fn execute_api_ssl(
 ) -> RosWireResult<()> {
     let context = execution_context(invocation, target, "api-ssl");
     let stream = with_context(
-        TlsApiStream::connect(&target.host, port, Duration::from_secs(10)),
+        TlsApiStream::connect(
+            &target.host,
+            port,
+            Duration::from_secs(10),
+            &target.tls_trust(),
+        ),
         context.clone(),
     )?;
     execute_classic_stream(stream, request, &target.user, &target.password, context)
@@ -397,12 +408,16 @@ impl ProtocolProbe for LiveProtocolProbe<'_> {
 
 impl LiveProtocolProbe<'_> {
     fn probe_rest(&self) -> ProbeResult {
-        let client = RestClient::https(
+        let client = match RestClient::https(
             &self.target.host,
             default_port("rest"),
             &self.target.user,
             &self.target.password,
-        );
+            &self.target.tls_trust(),
+        ) {
+            Ok(client) => client,
+            Err(error) => return classify_probe_error(&error),
+        };
         match client.system_resource() {
             Ok(value) => ProbeResult::Success {
                 routeros_major: routeros_major_from_rest_resource(&value),
@@ -417,6 +432,7 @@ impl LiveProtocolProbe<'_> {
             &self.target.host,
             default_port("api-ssl"),
             Duration::from_secs(10),
+            &self.target.tls_trust(),
         ) {
             Ok(stream) => self.probe_classic(stream),
             Err(error) => classify_probe_error(&error),
@@ -482,6 +498,13 @@ pub(crate) struct ExecutionTarget {
     pub(crate) requested_protocol: String,
     pub(crate) routeros_version: String,
     pub(crate) port: u16,
+    pub(crate) tls_cert_fingerprint: Option<String>,
+}
+
+impl ExecutionTarget {
+    pub(crate) fn tls_trust(&self) -> protocol::classic::transport::TlsTrust {
+        protocol::classic::transport::TlsTrust::from_fingerprint(self.tls_cert_fingerprint.clone())
+    }
 }
 
 pub(crate) fn resolve_execution_target(cli: &Cli) -> RosWireResult<ExecutionTarget> {
@@ -576,6 +599,11 @@ fn resolve_execution_target_with_env(
         .unwrap_or_else(|| "auto".to_owned());
     validate_routeros_version(&routeros_version)?;
 
+    let tls_cert_fingerprint = cli
+        .tls_cert_fingerprint
+        .clone()
+        .or_else(|| profile.and_then(|profile| profile.tls_cert_fingerprint.clone()));
+
     let explicit_port = cli
         .port
         .or_else(|| profile.and_then(|profile| profile.port));
@@ -594,6 +622,7 @@ fn resolve_execution_target_with_env(
         requested_protocol,
         routeros_version,
         port,
+        tls_cert_fingerprint,
     })
 }
 
@@ -1091,6 +1120,7 @@ value = "v1:nonce:ciphertext"
             requested_protocol: "auto".to_owned(),
             routeros_version: "v7".to_owned(),
             port: 8728,
+            tls_cert_fingerprint: None,
         };
 
         let context = execution_context(&invocation, &target, "api");

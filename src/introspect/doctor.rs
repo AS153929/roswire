@@ -172,11 +172,15 @@ fn remote_doctor(cli: &Cli) -> RemoteDoctor {
             return remote_doctor_rest(&target, target.port);
         }
         "api-ssl" => {
-            let stream =
-                match TlsApiStream::connect(&target.host, target.port, Duration::from_secs(10)) {
-                    Ok(stream) => stream,
-                    Err(error) => return remote_error("api-ssl", &error),
-                };
+            let stream = match TlsApiStream::connect(
+                &target.host,
+                target.port,
+                Duration::from_secs(10),
+                &target.tls_trust(),
+            ) {
+                Ok(stream) => stream,
+                Err(error) => return remote_error("api-ssl", &error),
+            };
             return probe_classic_remote(stream, &target.user, &target.password, "api-ssl");
         }
         _ => {}
@@ -202,6 +206,7 @@ fn remote_doctor_auto(target: &crate::ExecutionTarget) -> RemoteDoctor {
         &target.host,
         crate::default_port("api-ssl"),
         Duration::from_secs(10),
+        &target.tls_trust(),
     ) {
         Ok(stream) => {
             return probe_classic_remote(stream, &target.user, &target.password, "api-ssl")
@@ -239,7 +244,8 @@ fn probe_rest_resource(
         port,
         &target.user,
         &target.password,
-    );
+        &target.tls_trust(),
+    )?;
     client
         .system_resource()
         .map(|value| remote_doctor_from_rest_resource("rest", &value))

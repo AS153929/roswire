@@ -2,7 +2,7 @@ use crate::args::{Cli, TransferIfExists};
 use crate::config;
 use crate::error::{self, ErrorContext, RosWireError, RosWireResult};
 use crate::protocol::classic::{
-    transport::{ApiStream, TcpApiStream, TlsApiStream},
+    transport::{ApiStream, TcpApiStream, TlsApiStream, TlsTrust},
     ClassicApiSession,
 };
 use crate::protocol::rest::RestClient;
@@ -240,6 +240,13 @@ struct ControlRuntimeConfig {
     user: String,
     password: String,
     selected_protocol: String,
+    tls_cert_fingerprint: Option<String>,
+}
+
+impl ControlRuntimeConfig {
+    fn tls_trust(&self) -> TlsTrust {
+        TlsTrust::from_fingerprint(self.tls_cert_fingerprint.clone())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -419,6 +426,7 @@ impl WorkflowBackend for LiveWorkflowBackend {
                     &self.control.host,
                     self.control.port,
                     Duration::from_secs(10),
+                    &self.control.tls_trust(),
                 )
                 .map_err(|error| Box::new((*error).clone().with_context(context.clone())))?;
                 execute_classic_control(stream, command, &self.control, context)
@@ -1475,12 +1483,18 @@ fn resolve_control_runtime_config(
     .to_owned();
     let port = explicit_port.unwrap_or_else(|| default_control_port(&selected_protocol));
 
+    let tls_cert_fingerprint = cli
+        .tls_cert_fingerprint
+        .clone()
+        .or_else(|| profile.and_then(|profile| profile.tls_cert_fingerprint.clone()));
+
     Ok(ControlRuntimeConfig {
         host,
         port,
         user,
         password,
         selected_protocol,
+        tls_cert_fingerprint,
     })
 }
 
@@ -1528,15 +1542,18 @@ fn execute_rest_control(
     context: ErrorContext,
 ) -> RosWireResult<()> {
     let (path, body) = command.rest_request();
-    RestClient::https(
+    let client = RestClient::https(
         &control.host,
         control.port,
         &control.user,
         &control.password,
+        &control.tls_trust(),
     )
-    .post_json(path, body)
-    .map(|_| ())
-    .map_err(|error| Box::new((*error).clone().with_context(context)))
+    .map_err(|error| Box::new((*error).clone().with_context(context.clone())))?;
+    client
+        .post_json(path, body)
+        .map(|_| ())
+        .map_err(|error| Box::new((*error).clone().with_context(context)))
 }
 
 fn execute_classic_control<S: ApiStream>(
@@ -1562,9 +1579,13 @@ fn read_ssh_service(
     match control.selected_protocol.as_str() {
         "rest" => read_rest_ssh_service(control, context),
         "api-ssl" => {
-            let stream =
-                TlsApiStream::connect(&control.host, control.port, Duration::from_secs(10))
-                    .map_err(|error| Box::new((*error).clone().with_context(context.clone())))?;
+            let stream = TlsApiStream::connect(
+                &control.host,
+                control.port,
+                Duration::from_secs(10),
+                &control.tls_trust(),
+            )
+            .map_err(|error| Box::new((*error).clone().with_context(context.clone())))?;
             read_classic_ssh_service(stream, control, context)
         }
         _ => {
@@ -1584,9 +1605,13 @@ fn apply_ssh_service(
     match control.selected_protocol.as_str() {
         "rest" => apply_rest_ssh_service(control, desired, context),
         "api-ssl" => {
-            let stream =
-                TlsApiStream::connect(&control.host, control.port, Duration::from_secs(10))
-                    .map_err(|error| Box::new((*error).clone().with_context(context.clone())))?;
+            let stream = TlsApiStream::connect(
+                &control.host,
+                control.port,
+                Duration::from_secs(10),
+                &control.tls_trust(),
+            )
+            .map_err(|error| Box::new((*error).clone().with_context(context.clone())))?;
             apply_classic_ssh_service(stream, control, desired, context)
         }
         _ => {
@@ -1655,7 +1680,9 @@ fn read_rest_ssh_service(
         control.port,
         &control.user,
         &control.password,
-    );
+        &control.tls_trust(),
+    )
+    .map_err(|error| Box::new((*error).clone().with_context(context.clone())))?;
     let value = client
         .get("/rest/ip/service")
         .map_err(|error| Box::new((*error).clone().with_context(context.clone())))?;
@@ -1673,7 +1700,9 @@ fn apply_rest_ssh_service(
         control.port,
         &control.user,
         &control.password,
-    );
+        &control.tls_trust(),
+    )
+    .map_err(|error| Box::new((*error).clone().with_context(context.clone())))?;
     client
         .patch_json(
             &format!("/rest/ip/service/{id}"),
@@ -4187,6 +4216,7 @@ value = "profile-secret"
             user: "admin".to_owned(),
             password: "test-value".to_owned(),
             selected_protocol: "api".to_owned(),
+            tls_cert_fingerprint: None,
         };
 
         execute_classic_control(
@@ -4557,6 +4587,7 @@ value = "profile-secret"
                 user: "api-user".to_owned(),
                 password: "api-secret".to_owned(),
                 selected_protocol: selected_protocol.to_owned(),
+                tls_cert_fingerprint: None,
             },
             default_transfer_policy(),
         )

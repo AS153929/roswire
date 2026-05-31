@@ -23,8 +23,24 @@ impl std::fmt::Debug for RestClient {
 }
 
 impl RestClient {
-    pub fn https(host: &str, port: u16, user: &str, password: &str) -> Self {
-        Self::with_base_url(https_base_url(host, port), user, password)
+    pub fn https(
+        host: &str,
+        port: u16,
+        user: &str,
+        password: &str,
+        trust: &crate::protocol::classic::transport::TlsTrust,
+    ) -> RosWireResult<Self> {
+        let tls_config = crate::protocol::classic::transport::build_tls_client_config(trust)?;
+        let agent = ureq::AgentBuilder::new()
+            .timeout(Duration::from_secs(10))
+            .tls_config(tls_config)
+            .build();
+        Ok(Self {
+            base_url: trim_trailing_slash(https_base_url(host, port)),
+            user: user.to_owned(),
+            password: password.to_owned(),
+            agent,
+        })
     }
 
     pub fn with_base_url(base_url: impl Into<String>, user: &str, password: &str) -> Self {

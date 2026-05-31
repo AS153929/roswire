@@ -289,6 +289,16 @@ Fixed precedence:
 
 Probe failure handling is stable: network unreachable or disabled service errors continue to the next candidate; authentication failure is terminal and does not silently retry another protocol, because doing so could hide credential problems.
 
+### TLS certificate pinning for self-signed devices
+
+`api-ssl` and `rest` validate the server certificate against the public root store by default. RouterOS ships **self-signed** certificates, which fail this check. To trust such a device, pin its leaf certificate's SHA-256 fingerprint (mirroring the SSH host-key pin):
+
+- CLI: `--tls-cert-fingerprint SHA256:<base64-no-pad>`
+- Profile: `tls_cert_fingerprint` (set via `roswire config device set <profile> tls_cert_fingerprint=SHA256:...`)
+- Precedence: CLI overrides profile.
+
+When a pin is set, the connection succeeds only if the leaf certificate's SHA-256 matches (CA chain and hostname are intentionally ignored, exactly like the SSH pin). On mismatch the error reports the actual fingerprint so it can be verified out of band and pinned. With no pin set, full root-store verification is unchanged.
+
 ## Native API dialects
 
 RouterOS v6 and v7 both support the native API, but they differ in login flows, menu fields, error returns, and available commands. `roswire` uses this implementation strategy:

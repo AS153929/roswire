@@ -84,6 +84,8 @@ pub struct ProfileConfig {
     pub ssh_user: Option<String>,
     pub ssh_key: Option<String>,
     pub ssh_host_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls_cert_fingerprint: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allow_from: Vec<String>,
     #[serde(default)]
@@ -759,6 +761,13 @@ pub fn inspect_config(
         profile.ssh_host_key.as_deref(),
         None,
     );
+    insert_resolved_field(
+        &mut resolved,
+        "tls_cert_fingerprint",
+        cli.tls_cert_fingerprint.as_deref(),
+        profile.tls_cert_fingerprint.as_deref(),
+        None,
+    );
     let allow_from_cli = (!cli.allow_from.is_empty()).then(|| cli.allow_from.join(","));
     let allow_from_profile = (!profile.allow_from.is_empty()).then(|| profile.allow_from.join(","));
     insert_resolved_field(
@@ -1024,6 +1033,10 @@ fn handle_config_device(tokens: &[String]) -> RosWireResult<String> {
             "ssh_host_key" | "ssh-host-key" => {
                 profile.ssh_host_key = Some(value);
                 updated_fields.push("ssh_host_key".to_owned());
+            }
+            "tls_cert_fingerprint" | "tls-cert-fingerprint" => {
+                profile.tls_cert_fingerprint = Some(value);
+                updated_fields.push("tls_cert_fingerprint".to_owned());
             }
             "allow_from" | "allow-from" => {
                 profile.allow_from = parse_allow_from_list(&value)?;
@@ -1570,6 +1583,8 @@ retention_days = 7
             "3.3.3.3",
             "--protocol",
             "rest",
+            "--tls-cert-fingerprint",
+            "SHA256:clivalue",
             "ip",
             "address",
             "print",
@@ -1589,6 +1604,7 @@ retention_days = 7
                     transfer: Some("ssh".to_owned()),
                     port: Some(8728),
                     ssh_host_key: Some("SHA256:profile".to_owned()),
+                    tls_cert_fingerprint: Some("SHA256:profilecert".to_owned()),
                     allow_from: vec!["203.0.113.10/32".to_owned()],
                     ..ProfileConfig::default()
                 },
@@ -1639,6 +1655,13 @@ retention_days = 7
             Some(&ResolvedField {
                 value: "SHA256:profile".to_owned(),
                 source: ValueSource::Profile,
+            })
+        );
+        assert_eq!(
+            inspect.resolved.get("tls_cert_fingerprint"),
+            Some(&ResolvedField {
+                value: "SHA256:clivalue".to_owned(),
+                source: ValueSource::Cli,
             })
         );
         assert_eq!(

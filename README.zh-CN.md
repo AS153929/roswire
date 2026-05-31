@@ -289,6 +289,16 @@ roswire explain-error ROS_API_FAILURE --json
 
 探测失败时的处理也要稳定：网络不可达或服务未开启时继续尝试下一个候选协议；认证失败属于终止错误，不用另一个协议静默重试，以免掩盖凭据问题。
 
+### 为自签名设备固定 TLS 证书
+
+`api-ssl` 与 `rest` 默认使用公共根证书库校验服务器证书。RouterOS 出厂使用**自签名**证书，会导致校验失败。要信任此类设备，可固定其叶子证书的 SHA-256 指纹（与 SSH host-key 固定保持一致）：
+
+- 命令行：`--tls-cert-fingerprint SHA256:<base64-no-pad>`
+- 配置档：`tls_cert_fingerprint`（通过 `roswire config device set <profile> tls_cert_fingerprint=SHA256:...` 设置）
+- 优先级：命令行覆盖配置档。
+
+设置固定指纹后，仅当叶子证书的 SHA-256 匹配时连接才成功（与 SSH 固定一样，刻意忽略 CA 链和主机名）。不匹配时错误会给出实际指纹，便于带外核验后再固定。未设置固定指纹时，完整的根证书库校验行为保持不变。
+
 ## 原生 API 方言
 
 RouterOS v6 与 v7 都支持原生 API，但它们在登录流程、菜单字段、错误返回和命令可用性上存在差异。`roswire` 的实现策略是：

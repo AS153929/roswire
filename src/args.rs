@@ -140,6 +140,10 @@ pub struct Cli {
     #[arg(long = "ssh-host-key")]
     pub ssh_host_key: Option<String>,
 
+    /// Expected RouterOS TLS certificate fingerprint (SHA256:<base64>) for api-ssl/rest.
+    #[arg(long = "tls-cert-fingerprint")]
+    pub tls_cert_fingerprint: Option<String>,
+
     /// RouterOS SSH service port for transfer workflows.
     #[arg(long = "ssh-port")]
     pub ssh_port: Option<u16>,
@@ -512,6 +516,19 @@ mod tests {
             cli.tokens,
             vec!["file", "upload", "setup.rsc", "flash/setup.rsc"]
         );
+    }
+
+    #[test]
+    fn supports_tls_cert_fingerprint_flag() {
+        let cli = Cli::try_parse_from([
+            "roswire",
+            "--tls-cert-fingerprint",
+            "SHA256:abc",
+            "ip/address/print",
+        ])
+        .expect("tls cert fingerprint flag should parse");
+
+        assert_eq!(cli.tls_cert_fingerprint.as_deref(), Some("SHA256:abc"));
     }
 
     #[test]
