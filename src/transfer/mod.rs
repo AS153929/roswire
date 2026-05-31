@@ -338,6 +338,7 @@ trait WorkflowBackend {
         context: &ErrorContext,
     ) -> RosWireResult<()>;
     fn remove_remote_file(&mut self, remote: &str, context: &ErrorContext) -> RosWireResult<()>;
+    fn remove_local_file(&mut self, local: &str, context: &ErrorContext) -> RosWireResult<()>;
 }
 
 struct LiveWorkflowBackend {
@@ -481,6 +482,19 @@ impl WorkflowBackend for LiveWorkflowBackend {
                 .with_context(context.clone()),
             )
         })
+    }
+
+    fn remove_local_file(&mut self, local: &str, context: &ErrorContext) -> RosWireResult<()> {
+        match fs::remove_file(local) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(Box::new(
+                RosWireError::file_transfer_failed(format!(
+                    "failed to remove local temporary file: {error}"
+                ))
+                .with_context(context.clone()),
+            )),
+        }
     }
 }
 
@@ -901,7 +915,10 @@ fn execute_generated_download_workflow<B: WorkflowBackend>(
     backend: &mut B,
     context: &ErrorContext,
 ) -> RosWireResult<TransferResultPayload> {
-    if prepare_local_destination(spec.local, policy, context)? == DestinationDecision::Skip {
+    let tmp_local = raw_temporary_local_path(spec.local);
+    if prepare_local_destination(spec.local, policy, context)? == DestinationDecision::Skip
+        || prepare_local_destination(&tmp_local, policy, context)? == DestinationDecision::Skip
+    {
         return Ok(skipped_transfer_payload(
             spec.operation,
             DEFAULT_TRANSFER_BACKEND,
@@ -915,9 +932,17 @@ fn execute_generated_download_workflow<B: WorkflowBackend>(
         backend.wait_remote_file(&spec.remote, policy.wait_timeout(), context)
     })?;
 
-    let tmp_local = raw_temporary_local_path(spec.local);
-    let (bytes, checksum_sha256) = backend.download(&spec.remote, &tmp_local, context)?;
-    backend.finalize_local_download(&tmp_local, spec.local, context)?;
+    let (bytes, checksum_sha256) = match backend.download(&spec.remote, &tmp_local, context) {
+        Ok(result) => result,
+        Err(error) => {
+            let _ = backend.remove_local_file(&tmp_local, context);
+            return Err(error);
+        }
+    };
+    if let Err(error) = backend.finalize_local_download(&tmp_local, spec.local, context) {
+        let _ = backend.remove_local_file(&tmp_local, context);
+        return Err(error);
+    }
 
     if spec.cleanup_remote {
         backend.remove_remote_file(&spec.remote, context)?;
@@ -2493,13 +2518,13 @@ mod tests {
     use super::{
         build_plan_for_env, copy_with_sha256, default_transfer_policy, execute_classic_control,
         execute_file_workflow, handle_transfer_for_env, host_key_matches, load_selected_profile,
-        merge_ssh_allow_list, parse_port, parse_transfer_command, resolve_control_runtime_config,
-        resolve_ssh_key_passphrase, resolve_ssh_runtime_config, resolve_ssh_transfer_summary,
-        resolve_transfer_backend, routeros_bool, selected_context, sftp_or_scp_fallback,
-        sha256_fingerprint, ssh_service_snapshot_from_fields, ssh_service_snapshot_from_json,
-        transfer_policy, validate_safe_cidr, ControlCommand, ControlRuntimeConfig,
-        LiveWorkflowBackend, SshRuntimeConfig, SshServiceSnapshot, TransferCommand,
-        WorkflowBackend, DEFAULT_CONNECT_TIMEOUT_SECONDS, MAX_TRANSFER_BYTES,
+        merge_ssh_allow_list, parse_port, parse_transfer_command, raw_temporary_local_path,
+        resolve_control_runtime_config, resolve_ssh_key_passphrase, resolve_ssh_runtime_config,
+        resolve_ssh_transfer_summary, resolve_transfer_backend, routeros_bool, selected_context,
+        sftp_or_scp_fallback, sha256_fingerprint, ssh_service_snapshot_from_fields,
+        ssh_service_snapshot_from_json, transfer_policy, validate_safe_cidr, ControlCommand,
+        ControlRuntimeConfig, LiveWorkflowBackend, SshRuntimeConfig, SshServiceSnapshot,
+        TransferCommand, WorkflowBackend, DEFAULT_CONNECT_TIMEOUT_SECONDS, MAX_TRANSFER_BYTES,
     };
     use crate::args::{Cli, TransferIfExists};
     use crate::error::{ErrorCode, ErrorContext};
@@ -2508,6 +2533,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::fs;
     use std::io::{Cursor, Read, Result as IoResult, Write};
+    use std::path::Path;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
@@ -3681,6 +3707,88 @@ value = "profile-phrase"
     }
 
     #[test]
+    fn generated_download_cleans_temp_part_on_finalize_failure() {
+        let temp_dir = tempfile::tempdir().expect("tempdir should be created");
+        let local = temp_dir.path().join("config.backup").display().to_string();
+        let part = raw_temporary_local_path(&local);
+        let cli = Cli::try_parse_from(["roswire", "backup", "download", &local])
+            .expect("cli should parse");
+        let policy = transfer_policy(&cli).expect("policy should parse");
+        let command = parse_transfer_command(&cli.tokens)
+            .expect("transfer command should be detected")
+            .expect("transfer command should parse");
+        let mut backend = FakeWorkflowBackend {
+            materialize_download: true,
+            fail_finalize: true,
+            ..FakeWorkflowBackend::default()
+        };
+
+        let error = execute_file_workflow(
+            &command,
+            &cli,
+            &[],
+            &policy,
+            &mut backend,
+            &workflow_context("backup/download"),
+        )
+        .expect_err("finalize failure should propagate");
+
+        assert_eq!(error.error_code, ErrorCode::FileTransferFailed);
+        assert!(error.message.contains("finalize"));
+        assert!(
+            !Path::new(&part).exists(),
+            "temporary .part file must be cleaned up on failure: {part}",
+        );
+        assert!(
+            backend
+                .events
+                .iter()
+                .any(|event| event.starts_with("remove-local:")),
+            "best-effort local cleanup should be attempted: {:?}",
+            backend.events,
+        );
+    }
+
+    #[test]
+    fn generated_download_stale_part_respects_if_exists_fail() {
+        let temp_dir = tempfile::tempdir().expect("tempdir should be created");
+        let local = temp_dir.path().join("config.backup").display().to_string();
+        let part = raw_temporary_local_path(&local);
+        fs::write(&part, b"stale").expect("stale part should be written");
+        let cli = Cli::try_parse_from([
+            "roswire",
+            "backup",
+            "download",
+            &local,
+            "--if-exists",
+            "fail",
+        ])
+        .expect("cli should parse");
+        let policy = transfer_policy(&cli).expect("policy should parse");
+        let command = parse_transfer_command(&cli.tokens)
+            .expect("transfer command should be detected")
+            .expect("transfer command should parse");
+        let mut backend = FakeWorkflowBackend::default();
+
+        let error = execute_file_workflow(
+            &command,
+            &cli,
+            &[],
+            &policy,
+            &mut backend,
+            &workflow_context("backup/download"),
+        )
+        .expect_err("stale .part must trip --if-exists=fail before side effects");
+
+        assert_eq!(error.error_code, ErrorCode::FileTransferFailed);
+        assert!(
+            backend.events.is_empty(),
+            "no transfer side effects should run when destination check fails: {:?}",
+            backend.events,
+        );
+    }
+
+    #[test]
     fn generated_download_wait_uses_finite_retry_policy() {
         let cli = Cli::try_parse_from([
             "roswire",
@@ -4123,6 +4231,9 @@ value = "profile-secret"
         wait_failures_remaining: usize,
         fail_remove: bool,
         fail_control: bool,
+        fail_download: bool,
+        fail_finalize: bool,
+        materialize_download: bool,
         ssh_snapshot: SshServiceSnapshot,
         ssh_apply_count: usize,
         fail_ssh_apply_on: Option<usize>,
@@ -4171,9 +4282,20 @@ value = "profile-secret"
             &mut self,
             remote: &str,
             local: &str,
-            _context: &ErrorContext,
+            context: &ErrorContext,
         ) -> crate::error::RosWireResult<(u64, String)> {
             self.events.push(format!("download:{remote}->{local}"));
+            if self.materialize_download {
+                fs::write(local, b"partial-download").expect("part file should be writable");
+            }
+            if self.fail_download {
+                return Err(Box::new(
+                    crate::error::RosWireError::file_transfer_failed(format!(
+                        "download failed for {remote}"
+                    ))
+                    .with_context(context.clone()),
+                ));
+            }
             Ok((24, "download-sha".to_owned()))
         }
 
@@ -4181,10 +4303,18 @@ value = "profile-secret"
             &mut self,
             temporary_local: &str,
             local: &str,
-            _context: &ErrorContext,
+            context: &ErrorContext,
         ) -> crate::error::RosWireResult<()> {
             self.events
                 .push(format!("finalize:{temporary_local}->{local}"));
+            if self.fail_finalize {
+                return Err(Box::new(
+                    crate::error::RosWireError::file_transfer_failed(format!(
+                        "failed to finalize local download: {local}"
+                    ))
+                    .with_context(context.clone()),
+                ));
+            }
             Ok(())
         }
 
@@ -4245,6 +4375,16 @@ value = "profile-secret"
                     .with_context(context.clone()),
                 ));
             }
+            Ok(())
+        }
+
+        fn remove_local_file(
+            &mut self,
+            local: &str,
+            _context: &ErrorContext,
+        ) -> crate::error::RosWireResult<()> {
+            self.events.push(format!("remove-local:{local}"));
+            let _ = fs::remove_file(local);
             Ok(())
         }
     }
