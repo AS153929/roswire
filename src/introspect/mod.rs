@@ -566,6 +566,20 @@ fn catalog() -> Vec<CommandDefinition> {
             ],
         },
         CommandDefinition {
+            name: "system resource print".to_owned(),
+            summary: "Print RouterOS system resource and identity information.".to_owned(),
+            kind: "routeros-command".to_owned(),
+            syntax: "roswire system resource print --json".to_owned(),
+            arguments: vec![],
+            examples: vec!["roswire system resource print --json".to_owned()],
+            errors: vec![
+                "USAGE_ERROR".to_owned(),
+                "AUTH_FAILED".to_owned(),
+                "NETWORK_ERROR".to_owned(),
+                "ROS_API_FAILURE".to_owned(),
+            ],
+        },
+        CommandDefinition {
             name: "system package print".to_owned(),
             summary: "Print installed RouterOS packages.".to_owned(),
             kind: "routeros-command".to_owned(),
@@ -921,4 +935,129 @@ fn catalog() -> Vec<CommandDefinition> {
             ],
         },
     ]
+}
+
+#[cfg(test)]
+mod consistency_tests {
+    use super::catalog;
+    use crate::args::ParsedInvocation;
+    use crate::mapping::{resolve_mapping, supported_commands, ActionKind};
+    use std::collections::{BTreeMap, BTreeSet};
+
+    // `system script add` is intentionally surfaced in the catalog as the
+    // higher-level `script put` workflow (kind = "workflow"), not as a bare
+    // routeros-command. It is therefore expected to exist in the mapping ledger
+    // without a matching `routeros-command` catalog entry.
+    const MAPPING_ONLY_COMMANDS: &[&str] = &["system/script/add"];
+
+    fn catalog_routeros_command_keys() -> BTreeSet<String> {
+        catalog()
+            .into_iter()
+            .filter(|definition| definition.kind == "routeros-command")
+            .map(|definition| definition.name.replace(' ', "/"))
+            .collect()
+    }
+
+    fn mapping_command_keys() -> BTreeSet<String> {
+        supported_commands()
+            .into_iter()
+            .map(|mapping| {
+                format!(
+                    "{}/{}",
+                    mapping.cli_path.join("/"),
+                    mapping.action_kind.as_str()
+                )
+            })
+            .collect()
+    }
+
+    fn invocation_from_key(key: &str) -> ParsedInvocation {
+        let mut segments: Vec<&str> = key.split('/').collect();
+        let action = segments.pop().expect("command key has an action segment");
+        ParsedInvocation {
+            path: segments.iter().map(|item| (*item).to_owned()).collect(),
+            action: action.to_owned(),
+            resolved_args: BTreeMap::new(),
+            flags: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn every_routeros_command_in_catalog_resolves_to_a_mapping() {
+        for key in catalog_routeros_command_keys() {
+            let invocation = invocation_from_key(&key);
+            let mapping = resolve_mapping(&invocation).unwrap_or_else(|error| {
+                panic!("catalog routeros-command `{key}` does not resolve to a mapping: {error:?}")
+            });
+            let resolved_key = format!(
+                "{}/{}",
+                mapping.cli_path.join("/"),
+                mapping.action_kind.as_str()
+            );
+            assert_eq!(
+                resolved_key, key,
+                "catalog command `{key}` resolved to a different mapping `{resolved_key}`",
+            );
+        }
+    }
+
+    #[test]
+    fn catalog_and_mapping_command_ledgers_match() {
+        let catalog_keys = catalog_routeros_command_keys();
+        let mapping_keys = mapping_command_keys();
+
+        let catalog_only: Vec<&String> = catalog_keys.difference(&mapping_keys).collect();
+        assert!(
+            catalog_only.is_empty(),
+            "catalog routeros-command(s) without an executable mapping: {catalog_only:?}",
+        );
+
+        let expected_mapping_only: BTreeSet<String> = MAPPING_ONLY_COMMANDS
+            .iter()
+            .map(|item| (*item).to_owned())
+            .collect();
+        let mapping_only: BTreeSet<String> =
+            mapping_keys.difference(&catalog_keys).cloned().collect();
+        assert_eq!(
+            mapping_only, expected_mapping_only,
+            "mapping ledger drifted from catalog; add a catalog entry (or update \
+             MAPPING_ONLY_COMMANDS for a deliberate workflow surface)",
+        );
+    }
+
+    #[test]
+    fn write_commands_declare_side_effects_and_idempotency() {
+        for mapping in supported_commands() {
+            let key = format!(
+                "{}/{}",
+                mapping.cli_path.join("/"),
+                mapping.action_kind.as_str()
+            );
+            match mapping.action_kind {
+                ActionKind::Print => {
+                    assert!(
+                        mapping.side_effects.is_empty(),
+                        "print command `{key}` must not declare side effects",
+                    );
+                    assert_eq!(
+                        mapping.idempotency, "read-only",
+                        "print command `{key}` must be read-only",
+                    );
+                }
+                ActionKind::Add | ActionKind::Set | ActionKind::Remove => {
+                    assert!(
+                        !mapping.side_effects.is_empty(),
+                        "write command `{key}` must declare at least one side effect",
+                    );
+                    assert!(
+                        !mapping.idempotency.is_empty() && mapping.idempotency != "read-only",
+                        "write command `{key}` must declare a non read-only idempotency class",
+                    );
+                }
+                ActionKind::Raw => {
+                    panic!("raw command `{key}` must not appear in the static mapping ledger");
+                }
+            }
+        }
+    }
 }

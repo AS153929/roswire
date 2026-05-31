@@ -203,6 +203,231 @@ fn validate_print_options(
     Ok(())
 }
 
+/// Canonical, single-source-of-truth specification for a statically supported
+/// RouterOS command. `resolve_mapping` is driven by [`STATIC_COMMANDS`] so the
+/// executable mapping and the self-describing catalog can be cross-checked
+/// against one ledger instead of drifting apart. The `raw` passthrough is the
+/// only command not represented here because its action is derived dynamically
+/// from the request path.
+struct StaticCommand {
+    cli_path: &'static [&'static str],
+    action: &'static str,
+    action_kind: ActionKind,
+    routeros_path: &'static str,
+    side_effects: &'static [&'static str],
+    idempotency: &'static str,
+    rest: Option<(RestMethod, &'static str)>,
+}
+
+impl StaticCommand {
+    fn to_mapping(&self) -> CommandMapping {
+        CommandMapping {
+            cli_path: self
+                .cli_path
+                .iter()
+                .map(|item| (*item).to_owned())
+                .collect(),
+            action_kind: self.action_kind,
+            routeros_path: self.routeros_path.to_owned(),
+            side_effects: self
+                .side_effects
+                .iter()
+                .map(|item| (*item).to_owned())
+                .collect(),
+            idempotency: self.idempotency.to_owned(),
+            rest_mapping: self.rest.map(|(method, path)| RestMapping {
+                method,
+                path: path.to_owned(),
+            }),
+        }
+    }
+}
+
+const STATIC_COMMANDS: &[StaticCommand] = &[
+    StaticCommand {
+        cli_path: &["ip", "dhcp-client"],
+        action: "print",
+        action_kind: ActionKind::Print,
+        routeros_path: "/ip/dhcp-client/print",
+        side_effects: &[],
+        idempotency: "read-only",
+        rest: Some((RestMethod::Get, "/rest/ip/dhcp-client")),
+    },
+    StaticCommand {
+        cli_path: &["interface"],
+        action: "print",
+        action_kind: ActionKind::Print,
+        routeros_path: "/interface/print",
+        side_effects: &[],
+        idempotency: "read-only",
+        rest: Some((RestMethod::Get, "/rest/interface")),
+    },
+    StaticCommand {
+        cli_path: &["interface", "wireguard"],
+        action: "print",
+        action_kind: ActionKind::Print,
+        routeros_path: "/interface/wireguard/print",
+        side_effects: &[],
+        idempotency: "read-only",
+        rest: Some((RestMethod::Get, "/rest/interface/wireguard")),
+    },
+    StaticCommand {
+        cli_path: &["interface", "wireguard", "peers"],
+        action: "print",
+        action_kind: ActionKind::Print,
+        routeros_path: "/interface/wireguard/peers/print",
+        side_effects: &[],
+        idempotency: "read-only",
+        rest: Some((RestMethod::Get, "/rest/interface/wireguard/peers")),
+    },
+    StaticCommand {
+        cli_path: &["ip", "address"],
+        action: "print",
+        action_kind: ActionKind::Print,
+        routeros_path: "/ip/address/print",
+        side_effects: &[],
+        idempotency: "read-only",
+        rest: Some((RestMethod::Get, "/rest/ip/address")),
+    },
+    StaticCommand {
+        cli_path: &["ip", "address"],
+        action: "add",
+        action_kind: ActionKind::Add,
+        routeros_path: "/ip/address/add",
+        side_effects: &["creates-routeros-record"],
+        idempotency: "not-idempotent",
+        rest: Some((RestMethod::Put, "/rest/ip/address")),
+    },
+    StaticCommand {
+        cli_path: &["ip", "address"],
+        action: "set",
+        action_kind: ActionKind::Set,
+        routeros_path: "/ip/address/set",
+        side_effects: &["updates-routeros-record"],
+        idempotency: "idempotent",
+        rest: Some((RestMethod::Patch, "/rest/ip/address/{.id}")),
+    },
+    StaticCommand {
+        cli_path: &["ip", "address"],
+        action: "remove",
+        action_kind: ActionKind::Remove,
+        routeros_path: "/ip/address/remove",
+        side_effects: &["deletes-routeros-record"],
+        idempotency: "not-idempotent",
+        rest: Some((RestMethod::Delete, "/rest/ip/address/{.id}")),
+    },
+    StaticCommand {
+        cli_path: &["ip", "firewall", "address-list"],
+        action: "print",
+        action_kind: ActionKind::Print,
+        routeros_path: "/ip/firewall/address-list/print",
+        side_effects: &[],
+        idempotency: "read-only",
+        rest: Some((RestMethod::Get, "/rest/ip/firewall/address-list")),
+    },
+    StaticCommand {
+        cli_path: &["ip", "firewall", "filter"],
+        action: "print",
+        action_kind: ActionKind::Print,
+        routeros_path: "/ip/firewall/filter/print",
+        side_effects: &[],
+        idempotency: "read-only",
+        rest: Some((RestMethod::Get, "/rest/ip/firewall/filter")),
+    },
+    StaticCommand {
+        cli_path: &["ip", "firewall", "nat"],
+        action: "print",
+        action_kind: ActionKind::Print,
+        routeros_path: "/ip/firewall/nat/print",
+        side_effects: &[],
+        idempotency: "read-only",
+        rest: Some((RestMethod::Get, "/rest/ip/firewall/nat")),
+    },
+    StaticCommand {
+        cli_path: &["ip", "firewall", "connection"],
+        action: "print",
+        action_kind: ActionKind::Print,
+        routeros_path: "/ip/firewall/connection/print",
+        side_effects: &[],
+        idempotency: "read-only",
+        rest: Some((RestMethod::Get, "/rest/ip/firewall/connection")),
+    },
+    StaticCommand {
+        cli_path: &["ip", "route"],
+        action: "print",
+        action_kind: ActionKind::Print,
+        routeros_path: "/ip/route/print",
+        side_effects: &[],
+        idempotency: "read-only",
+        rest: Some((RestMethod::Get, "/rest/ip/route")),
+    },
+    StaticCommand {
+        cli_path: &["system", "resource"],
+        action: "print",
+        action_kind: ActionKind::Print,
+        routeros_path: "/system/resource/print",
+        side_effects: &[],
+        idempotency: "read-only",
+        rest: Some((RestMethod::Get, "/rest/system/resource")),
+    },
+    StaticCommand {
+        cli_path: &["system", "package"],
+        action: "print",
+        action_kind: ActionKind::Print,
+        routeros_path: "/system/package/print",
+        side_effects: &[],
+        idempotency: "read-only",
+        rest: Some((RestMethod::Get, "/rest/system/package")),
+    },
+    StaticCommand {
+        cli_path: &["system", "script"],
+        action: "add",
+        action_kind: ActionKind::Add,
+        routeros_path: "/system/script/add",
+        side_effects: &["creates-routeros-script"],
+        idempotency: "not-idempotent",
+        rest: Some((RestMethod::Put, "/rest/system/script")),
+    },
+    StaticCommand {
+        cli_path: &["tool", "mac-server"],
+        action: "print",
+        action_kind: ActionKind::Print,
+        routeros_path: "/tool/mac-server/print",
+        side_effects: &[],
+        idempotency: "read-only",
+        rest: Some((RestMethod::Get, "/rest/tool/mac-server")),
+    },
+    StaticCommand {
+        cli_path: &["tool", "netwatch"],
+        action: "print",
+        action_kind: ActionKind::Print,
+        routeros_path: "/tool/netwatch/print",
+        side_effects: &[],
+        idempotency: "read-only",
+        rest: Some((RestMethod::Get, "/rest/tool/netwatch")),
+    },
+    StaticCommand {
+        cli_path: &["user"],
+        action: "print",
+        action_kind: ActionKind::Print,
+        routeros_path: "/user/print",
+        side_effects: &[],
+        idempotency: "read-only",
+        rest: Some((RestMethod::Get, "/rest/user")),
+    },
+];
+
+/// Owned view over every statically supported RouterOS command. The catalog
+/// consistency tests cross-check this against `introspect::catalog()` so that a
+/// command added to one ledger without the other fails the build. The `raw`
+/// passthrough is intentionally excluded (its action is path-derived).
+pub fn supported_commands() -> Vec<CommandMapping> {
+    STATIC_COMMANDS
+        .iter()
+        .map(StaticCommand::to_mapping)
+        .collect()
+}
+
 pub fn resolve_mapping(invocation: &ParsedInvocation) -> RosWireResult<CommandMapping> {
     let path = invocation
         .path
@@ -211,180 +436,23 @@ pub fn resolve_mapping(invocation: &ParsedInvocation) -> RosWireResult<CommandMa
         .collect::<Vec<_>>();
     let action = invocation.action.as_str();
 
-    match (path.as_slice(), action) {
-        (["raw"], raw_path) => raw_mapping(raw_path),
-        (["ip", "dhcp-client"], "print") => Ok(print_mapping(
-            &["ip", "dhcp-client"],
-            "/ip/dhcp-client/print",
-            Some(RestMapping {
-                method: RestMethod::Get,
-                path: "/rest/ip/dhcp-client".to_owned(),
-            }),
-        )),
-        (["interface"], "print") => Ok(print_mapping(
-            &["interface"],
-            "/interface/print",
-            Some(RestMapping {
-                method: RestMethod::Get,
-                path: "/rest/interface".to_owned(),
-            }),
-        )),
-        (["interface", "wireguard"], "print") => Ok(print_mapping(
-            &["interface", "wireguard"],
-            "/interface/wireguard/print",
-            Some(RestMapping {
-                method: RestMethod::Get,
-                path: "/rest/interface/wireguard".to_owned(),
-            }),
-        )),
-        (["interface", "wireguard", "peers"], "print") => Ok(print_mapping(
-            &["interface", "wireguard", "peers"],
-            "/interface/wireguard/peers/print",
-            Some(RestMapping {
-                method: RestMethod::Get,
-                path: "/rest/interface/wireguard/peers".to_owned(),
-            }),
-        )),
-        (["ip", "address"], "print") => Ok(print_mapping(
-            &["ip", "address"],
-            "/ip/address/print",
-            Some(RestMapping {
-                method: RestMethod::Get,
-                path: "/rest/ip/address".to_owned(),
-            }),
-        )),
-        (["ip", "address"], "add") => Ok(write_mapping(
-            &["ip", "address"],
-            ActionKind::Add,
-            "/ip/address/add",
-            "creates-routeros-record",
-            "not-idempotent",
-            Some(RestMapping {
-                method: RestMethod::Put,
-                path: "/rest/ip/address".to_owned(),
-            }),
-        )),
-        (["ip", "address"], "set") => Ok(write_mapping(
-            &["ip", "address"],
-            ActionKind::Set,
-            "/ip/address/set",
-            "updates-routeros-record",
-            "idempotent",
-            Some(RestMapping {
-                method: RestMethod::Patch,
-                path: "/rest/ip/address/{.id}".to_owned(),
-            }),
-        )),
-        (["ip", "address"], "remove") => Ok(write_mapping(
-            &["ip", "address"],
-            ActionKind::Remove,
-            "/ip/address/remove",
-            "deletes-routeros-record",
-            "not-idempotent",
-            Some(RestMapping {
-                method: RestMethod::Delete,
-                path: "/rest/ip/address/{.id}".to_owned(),
-            }),
-        )),
-        (["ip", "firewall", "address-list"], "print") => Ok(print_mapping(
-            &["ip", "firewall", "address-list"],
-            "/ip/firewall/address-list/print",
-            Some(RestMapping {
-                method: RestMethod::Get,
-                path: "/rest/ip/firewall/address-list".to_owned(),
-            }),
-        )),
-        (["ip", "firewall", "filter"], "print") => Ok(print_mapping(
-            &["ip", "firewall", "filter"],
-            "/ip/firewall/filter/print",
-            Some(RestMapping {
-                method: RestMethod::Get,
-                path: "/rest/ip/firewall/filter".to_owned(),
-            }),
-        )),
-        (["ip", "firewall", "nat"], "print") => Ok(print_mapping(
-            &["ip", "firewall", "nat"],
-            "/ip/firewall/nat/print",
-            Some(RestMapping {
-                method: RestMethod::Get,
-                path: "/rest/ip/firewall/nat".to_owned(),
-            }),
-        )),
-        (["ip", "firewall", "connection"], "print") => Ok(print_mapping(
-            &["ip", "firewall", "connection"],
-            "/ip/firewall/connection/print",
-            Some(RestMapping {
-                method: RestMethod::Get,
-                path: "/rest/ip/firewall/connection".to_owned(),
-            }),
-        )),
-        (["ip", "route"], "print") => Ok(print_mapping(
-            &["ip", "route"],
-            "/ip/route/print",
-            Some(RestMapping {
-                method: RestMethod::Get,
-                path: "/rest/ip/route".to_owned(),
-            }),
-        )),
-        (["system", "resource"], "print") => Ok(print_mapping(
-            &["system", "resource"],
-            "/system/resource/print",
-            Some(RestMapping {
-                method: RestMethod::Get,
-                path: "/rest/system/resource".to_owned(),
-            }),
-        )),
-        (["system", "package"], "print") => Ok(print_mapping(
-            &["system", "package"],
-            "/system/package/print",
-            Some(RestMapping {
-                method: RestMethod::Get,
-                path: "/rest/system/package".to_owned(),
-            }),
-        )),
-        (["system", "script"], "add") => Ok(write_mapping(
-            &["system", "script"],
-            ActionKind::Add,
-            "/system/script/add",
-            "creates-routeros-script",
-            "not-idempotent",
-            Some(RestMapping {
-                method: RestMethod::Put,
-                path: "/rest/system/script".to_owned(),
-            }),
-        )),
-        (["tool", "mac-server"], "print") => Ok(print_mapping(
-            &["tool", "mac-server"],
-            "/tool/mac-server/print",
-            Some(RestMapping {
-                method: RestMethod::Get,
-                path: "/rest/tool/mac-server".to_owned(),
-            }),
-        )),
-        (["tool", "netwatch"], "print") => Ok(print_mapping(
-            &["tool", "netwatch"],
-            "/tool/netwatch/print",
-            Some(RestMapping {
-                method: RestMethod::Get,
-                path: "/rest/tool/netwatch".to_owned(),
-            }),
-        )),
-        (["user"], "print") => Ok(print_mapping(
-            &["user"],
-            "/user/print",
-            Some(RestMapping {
-                method: RestMethod::Get,
-                path: "/rest/user".to_owned(),
-            }),
-        )),
-        _ => Err(Box::new(
-            RosWireError::unsupported_action(format!(
-                "unsupported RouterOS action: {}",
-                command_name(invocation),
-            ))
-            .with_context(mapping_error_context(invocation)),
-        )),
+    if path.as_slice() == ["raw"] {
+        return raw_mapping(action);
     }
+
+    STATIC_COMMANDS
+        .iter()
+        .find(|command| command.cli_path == path.as_slice() && command.action == action)
+        .map(StaticCommand::to_mapping)
+        .ok_or_else(|| {
+            Box::new(
+                RosWireError::unsupported_action(format!(
+                    "unsupported RouterOS action: {}",
+                    command_name(invocation),
+                ))
+                .with_context(mapping_error_context(invocation)),
+            )
+        })
 }
 
 pub fn command_name(invocation: &ParsedInvocation) -> String {
@@ -395,39 +463,6 @@ pub fn command_name(invocation: &ParsedInvocation) -> String {
         .map(String::as_str)
         .collect::<Vec<_>>()
         .join("/")
-}
-
-fn print_mapping(
-    cli_path: &[&str],
-    routeros_path: &str,
-    rest_mapping: Option<RestMapping>,
-) -> CommandMapping {
-    CommandMapping {
-        cli_path: cli_path.iter().map(|item| (*item).to_owned()).collect(),
-        action_kind: ActionKind::Print,
-        routeros_path: routeros_path.to_owned(),
-        side_effects: Vec::new(),
-        idempotency: "read-only".to_owned(),
-        rest_mapping,
-    }
-}
-
-fn write_mapping(
-    cli_path: &[&str],
-    action_kind: ActionKind,
-    routeros_path: &str,
-    side_effect: &str,
-    idempotency: &str,
-    rest_mapping: Option<RestMapping>,
-) -> CommandMapping {
-    CommandMapping {
-        cli_path: cli_path.iter().map(|item| (*item).to_owned()).collect(),
-        action_kind,
-        routeros_path: routeros_path.to_owned(),
-        side_effects: vec![side_effect.to_owned()],
-        idempotency: idempotency.to_owned(),
-        rest_mapping,
-    }
 }
 
 fn raw_mapping(raw_path: &str) -> RosWireResult<CommandMapping> {
