@@ -534,8 +534,10 @@ fn schema_discover_remote_returns_degraded_snapshot_without_config() {
         .success()
         .stderr(predicate::str::is_empty())
         .stdout(predicate::str::contains(
-            "\"schema_version\":\"roswire.remote.schema.v1\"",
+            "\"schema_version\":\"roswire.remote.schema.v2\"",
         ))
+        .stdout(predicate::str::contains("\"degraded\":true"))
+        .stdout(predicate::str::contains("REMOTE_PROBE_NOT_IMPLEMENTED"))
         .stdout(predicate::str::contains("\"cache_key\":\"cache:"))
         .stdout(predicate::str::contains("\"status\":\"miss\""))
         .stdout(predicate::str::contains("CONFIG_ERROR"))
@@ -552,7 +554,7 @@ fn schema_discover_remote_refresh_marks_cache_status() {
         .success()
         .stderr(predicate::str::is_empty())
         .stdout(predicate::str::contains(
-            "\"schema_version\":\"roswire.remote.schema.v1\"",
+            "\"schema_version\":\"roswire.remote.schema.v2\"",
         ))
         .stdout(predicate::str::contains("\"status\":\"refresh\""))
         .stdout(predicate::str::contains("\"runtime_value_hints\""))
@@ -590,7 +592,8 @@ fn schema_command_remote_system_package_has_static_fields() {
     .stdout(predicate::str::contains(
         "\"name\":\"system package print\"",
     ))
-    .stdout(predicate::str::contains("\"output_fields_observed\""))
+    .stdout(predicate::str::contains("\"output_fields_static\""))
+    .stdout(predicate::str::contains("\"output_fields_observed\":[]"))
     .stdout(predicate::str::contains("\"version\""))
     .stdout(predicate::str::contains("\"support\":\"unknown\""));
 }

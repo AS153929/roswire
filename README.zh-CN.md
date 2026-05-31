@@ -271,8 +271,8 @@ roswire explain-error ROS_API_FAILURE --json
 - `help --json` 是机器可读帮助，输出完整命令目录、参数结构、示例、输出 schema、错误码和自愈提示；`--help` 保留给人类阅读。
 - `config inspect --json` 输出解析后的 profile、字段来源和 secret 状态，但永远脱敏密码、token 和私钥。
 - `doctor --json` 默认只做本地检查；只有显式传入 `--include-remote` 才访问 RouterOS。
-- 默认帮助和 schema 来自 `roswire` 内置静态目录；传入 `--remote` 才连接 RouterOS，叠加设备实际版本、协议能力、可观测字段和运行时枚举值。
-- 远端 schema 发现结果可以缓存到 `~/.roswire/cache/`，但必须按 RouterOS 版本、build time、packages 和协议能力失效；缓存不能包含 secret 或完整本地路径。
+- 默认帮助和 schema 来自 `roswire` 内置静态目录。`--remote` **目前不会探测设备**：它返回 `degraded` 快照（`degraded=true`、`schema_source=["static_catalog"]`、`REMOTE_PROBE_NOT_IMPLEMENTED` 警告，且 `output_fields_observed` 为空）。静态目录字段放在 `output_fields_static`，`runtime_value_hints` 标注为 `static_catalog_hint`/`not_exhaustive`。`commands --remote` 会以 `REMOTE_SCHEMA_UNAVAILABLE` 拒绝。真实的设备版本、协议能力、可观测字段和运行时枚举探测尚在路线图（见 `docs/develop-plan.md`），尚未实现。
+- 远端 schema 载荷定义了 cache-key 与 TTL 语义，但 `~/.roswire/cache/` 的落盘缓存尚未实现（`cache.status` 字段是计算值，并未持久化）。待真实探测落地后，缓存必须按 RouterOS 版本、build time、packages 和协议能力失效，且不能包含 secret 或完整本地路径。
 - 自描述输出包含 `schema_version`，便于 Agent 做兼容判断。
 
 ## 调用优先级

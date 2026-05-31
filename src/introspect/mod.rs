@@ -187,16 +187,16 @@ fn remote_schema_payload(tokens: &[String], cli: &Cli) -> RosWireResult<String> 
         }
     };
 
-    let (profile, fingerprint, warning) = match crate::resolve_execution_target(cli) {
+    let (profile, fingerprint, additional_warnings) = match crate::resolve_execution_target(cli) {
         Ok(target) => (
             cli.profile.clone().unwrap_or_else(|| "default".to_owned()),
             discovery::unknown_fingerprint(&target.host, &target.requested_protocol),
-            "CAPABILITY_PROBE_FAILED".to_owned(),
+            Vec::new(),
         ),
         Err(error) => (
             cli.profile.clone().unwrap_or_else(|| "default".to_owned()),
             discovery::unknown_fingerprint("unknown", "unknown"),
-            discovery::warning_name(error.error_code),
+            vec![discovery::warning_name(error.error_code)],
         ),
     };
 
@@ -209,7 +209,7 @@ fn remote_schema_payload(tokens: &[String], cli: &Cli) -> RosWireResult<String> 
         &profile,
         &fingerprint,
         policies,
-        warning,
+        additional_warnings,
         cache_status,
     );
     render_json(&snapshot)

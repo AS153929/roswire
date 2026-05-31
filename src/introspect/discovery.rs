@@ -6,6 +6,12 @@ use crate::{args::ParsedInvocation, error::ErrorCode};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
+/// Warning emitted whenever a `--remote` schema request is served from the
+/// static catalog. Remote device probing is not implemented yet, so no device
+/// fact was ever observed. This is deliberately distinct from a transient
+/// connectivity failure so an agent does not retry expecting a reachable device.
+pub const REMOTE_PROBE_NOT_IMPLEMENTED: &str = "REMOTE_PROBE_NOT_IMPLEMENTED";
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct RemoteOverlayCommand {
     pub name: String,
@@ -40,6 +46,7 @@ pub struct MergedCommand {
     pub schema_source: Vec<String>,
     pub side_effects: Vec<String>,
     pub idempotency: String,
+    pub output_fields_static: Vec<String>,
     pub output_fields_observed: Vec<String>,
     pub runtime_value_hints: BTreeMap<String, RuntimeValueHint>,
     pub warnings: Vec<String>,
@@ -56,6 +63,7 @@ pub struct RemoteSchemaCacheStatus {
 pub struct RemoteSchemaSnapshot {
     pub schema_version: String,
     pub schema_source: Vec<String>,
+    pub degraded: bool,
     pub profile: String,
     pub device: DeviceFingerprint,
     pub cache: RemoteSchemaCacheStatus,
@@ -73,6 +81,7 @@ pub fn merge_overlay(
         schema_source: vec!["static_catalog".to_owned(), "remote_overlay".to_owned()],
         side_effects: policy.side_effects.clone(),
         idempotency: policy.idempotency.clone(),
+        output_fields_static: static_output_fields(&policy.name),
         output_fields_observed: overlay.output_fields_observed.clone(),
         runtime_value_hints: overlay.runtime_value_hints.clone(),
         warnings: overlay.warnings.clone(),
@@ -84,8 +93,9 @@ pub fn remote_schema_unavailable_snapshot(
     fingerprint: &DeviceFingerprint,
 ) -> RemoteSchemaSnapshot {
     RemoteSchemaSnapshot {
-        schema_version: "roswire.remote.schema.v1".to_owned(),
-        schema_source: vec!["static_catalog".to_owned(), "remote_overlay".to_owned()],
+        schema_version: "roswire.remote.schema.v2".to_owned(),
+        schema_source: vec!["static_catalog".to_owned()],
+        degraded: true,
         profile: profile.to_owned(),
         device: fingerprint.clone(),
         cache: RemoteSchemaCacheStatus {
@@ -102,13 +112,13 @@ pub fn degraded_remote_schema_snapshot(
     profile: &str,
     fingerprint: &DeviceFingerprint,
     policies: Vec<StaticCommandPolicy>,
-    warning: impl Into<String>,
+    additional_warnings: Vec<String>,
 ) -> RemoteSchemaSnapshot {
     degraded_remote_schema_snapshot_with_cache_status(
         profile,
         fingerprint,
         policies,
-        warning,
+        additional_warnings,
         CacheLookupStatus::Miss,
     )
 }
@@ -117,29 +127,31 @@ pub fn degraded_remote_schema_snapshot_with_cache_status(
     profile: &str,
     fingerprint: &DeviceFingerprint,
     policies: Vec<StaticCommandPolicy>,
-    warning: impl Into<String>,
+    additional_warnings: Vec<String>,
     cache_status: CacheLookupStatus,
 ) -> RemoteSchemaSnapshot {
-    let warning = warning.into();
+    let mut warnings = vec![REMOTE_PROBE_NOT_IMPLEMENTED.to_owned()];
+    warnings.extend(additional_warnings);
+
     let commands = policies
         .into_iter()
-        .map(|policy| {
-            let overlay = RemoteOverlayCommand {
-                name: policy.name.clone(),
-                support: "unknown".to_owned(),
-                output_fields_observed: static_output_fields(&policy.name),
-                runtime_value_hints: static_runtime_value_hints(&policy.name),
-                attempted_side_effects_override: None,
-                attempted_idempotency_override: None,
-                warnings: vec![warning.clone()],
-            };
-            merge_overlay(&policy, &overlay)
+        .map(|policy| MergedCommand {
+            name: policy.name.clone(),
+            support: "unknown".to_owned(),
+            schema_source: vec!["static_catalog".to_owned()],
+            side_effects: policy.side_effects.clone(),
+            idempotency: policy.idempotency.clone(),
+            output_fields_static: static_output_fields(&policy.name),
+            output_fields_observed: Vec::new(),
+            runtime_value_hints: static_runtime_value_hints(&policy.name),
+            warnings: vec![REMOTE_PROBE_NOT_IMPLEMENTED.to_owned()],
         })
         .collect();
 
     RemoteSchemaSnapshot {
-        schema_version: "roswire.remote.schema.v1".to_owned(),
-        schema_source: vec!["static_catalog".to_owned(), "remote_overlay".to_owned()],
+        schema_version: "roswire.remote.schema.v2".to_owned(),
+        schema_source: vec!["static_catalog".to_owned()],
+        degraded: true,
         profile: profile.to_owned(),
         device: fingerprint.clone(),
         cache: RemoteSchemaCacheStatus {
@@ -148,7 +160,7 @@ pub fn degraded_remote_schema_snapshot_with_cache_status(
             cache_key: compute_cache_key(profile, fingerprint),
         },
         commands,
-        warnings: vec![warning],
+        warnings,
     }
 }
 
@@ -407,6 +419,11 @@ mod tests {
         assert_eq!(merged.idempotency, "not-idempotent");
         assert_eq!(merged.support, "supported");
         assert_eq!(
+            merged.schema_source,
+            vec!["static_catalog", "remote_overlay"]
+        );
+        assert_eq!(merged.output_fields_observed, vec![".id", "address"]);
+        assert_eq!(
             merged
                 .runtime_value_hints
                 .get("interface")
@@ -420,13 +437,48 @@ mod tests {
         let fp = fingerprint();
         let snapshot = remote_schema_unavailable_snapshot("home", &fp);
 
-        assert_eq!(snapshot.schema_version, "roswire.remote.schema.v1");
+        assert_eq!(snapshot.schema_version, "roswire.remote.schema.v2");
+        assert!(snapshot.degraded);
+        assert_eq!(snapshot.schema_source, vec!["static_catalog"]);
         assert!(snapshot
             .warnings
             .iter()
             .any(|w| w == "REMOTE_SCHEMA_UNAVAILABLE"));
         assert!(snapshot.cache.cache_key.starts_with("cache:"));
         assert!(!snapshot.cache.cache_key.contains("192.168.88.1"));
+    }
+
+    #[test]
+    fn degraded_snapshot_is_marked_degraded_and_observes_nothing() {
+        let fp = unknown_fingerprint("198.51.100.10", "unknown");
+        let policies = vec![StaticCommandPolicy {
+            name: "ip address print".to_owned(),
+            side_effects: Vec::new(),
+            idempotency: "read-only".to_owned(),
+        }];
+
+        let snapshot = degraded_remote_schema_snapshot("studio", &fp, policies, Vec::new());
+
+        assert!(snapshot.degraded);
+        assert_eq!(snapshot.schema_source, vec!["static_catalog"]);
+        assert!(snapshot
+            .warnings
+            .iter()
+            .any(|item| item == "REMOTE_PROBE_NOT_IMPLEMENTED"));
+        let command = &snapshot.commands[0];
+        assert_eq!(command.schema_source, vec!["static_catalog"]);
+        assert!(
+            command.output_fields_observed.is_empty(),
+            "degraded mode must not claim observed device fields"
+        );
+        assert!(
+            !command.output_fields_static.is_empty(),
+            "static catalog fields must be surfaced under output_fields_static"
+        );
+        assert!(command
+            .warnings
+            .iter()
+            .any(|item| item == "REMOTE_PROBE_NOT_IMPLEMENTED"));
     }
 
     #[test]
@@ -442,7 +494,7 @@ mod tests {
             "studio",
             &fp,
             policies,
-            warning_name(ErrorCode::NetworkError),
+            vec![warning_name(ErrorCode::NetworkError)],
         );
 
         assert_eq!(snapshot.cache.status, "miss");
@@ -470,7 +522,7 @@ mod tests {
             "studio",
             &fp,
             policies,
-            warning_name(ErrorCode::ConfigError),
+            vec![warning_name(ErrorCode::ConfigError)],
             CacheLookupStatus::Refresh,
         );
 
@@ -491,7 +543,7 @@ mod tests {
             "studio",
             &fp,
             policies,
-            warning_name(ErrorCode::NetworkError),
+            vec![warning_name(ErrorCode::NetworkError)],
         );
         let json = serde_json::to_string(&snapshot).expect("snapshot should serialize");
 
@@ -543,13 +595,13 @@ mod tests {
             "studio",
             &fp,
             policies,
-            warning_name(ErrorCode::ConfigError),
+            vec![warning_name(ErrorCode::ConfigError)],
         );
 
         assert_eq!(snapshot.commands[0].name, "system package print");
         assert_eq!(snapshot.commands[0].idempotency, "read-only");
         assert_eq!(
-            snapshot.commands[0].output_fields_observed,
+            snapshot.commands[0].output_fields_static,
             vec![".id", "name", "version", "build-time", "disabled"]
         );
     }
@@ -567,13 +619,13 @@ mod tests {
             "studio",
             &fp,
             policies,
-            warning_name(ErrorCode::ConfigError),
+            vec![warning_name(ErrorCode::ConfigError)],
         );
 
         assert_eq!(snapshot.commands[0].name, "user print");
         assert_eq!(snapshot.commands[0].idempotency, "read-only");
         assert_eq!(
-            snapshot.commands[0].output_fields_observed,
+            snapshot.commands[0].output_fields_static,
             vec![
                 ".id",
                 "name",
@@ -598,13 +650,13 @@ mod tests {
             "studio",
             &fp,
             policies,
-            warning_name(ErrorCode::ConfigError),
+            vec![warning_name(ErrorCode::ConfigError)],
         );
 
         assert_eq!(snapshot.commands[0].name, "ip route print");
         assert_eq!(snapshot.commands[0].idempotency, "read-only");
         assert_eq!(
-            snapshot.commands[0].output_fields_observed,
+            snapshot.commands[0].output_fields_static,
             vec![
                 ".id",
                 "dst-address",
@@ -644,16 +696,16 @@ mod tests {
             "studio",
             &fp,
             policies,
-            warning_name(ErrorCode::ConfigError),
+            vec![warning_name(ErrorCode::ConfigError)],
         );
 
         assert_eq!(snapshot.commands[0].name, "ip firewall address-list print");
         assert!(snapshot.commands[0]
-            .output_fields_observed
+            .output_fields_static
             .contains(&"list".to_owned()));
         assert_eq!(snapshot.commands[1].name, "ip firewall filter print");
         assert!(snapshot.commands[1]
-            .output_fields_observed
+            .output_fields_static
             .contains(&"chain".to_owned()));
         assert_eq!(
             snapshot.commands[1]
@@ -664,7 +716,7 @@ mod tests {
         );
         assert_eq!(snapshot.commands[2].name, "ip firewall nat print");
         assert!(snapshot.commands[2]
-            .output_fields_observed
+            .output_fields_static
             .contains(&"to-addresses".to_owned()));
     }
 
@@ -688,16 +740,16 @@ mod tests {
             "studio",
             &fp,
             policies,
-            warning_name(ErrorCode::ConfigError),
+            vec![warning_name(ErrorCode::ConfigError)],
         );
 
         assert_eq!(snapshot.commands[0].name, "tool mac-server print");
         assert!(snapshot.commands[0]
-            .output_fields_observed
+            .output_fields_static
             .contains(&"allowed-interface-list".to_owned()));
         assert_eq!(snapshot.commands[1].name, "tool netwatch print");
         assert!(snapshot.commands[1]
-            .output_fields_observed
+            .output_fields_static
             .contains(&"status".to_owned()));
     }
 
@@ -721,16 +773,16 @@ mod tests {
             "studio",
             &fp,
             policies,
-            warning_name(ErrorCode::ConfigError),
+            vec![warning_name(ErrorCode::ConfigError)],
         );
 
         assert_eq!(snapshot.commands[0].name, "interface wireguard print");
         assert!(snapshot.commands[0]
-            .output_fields_observed
+            .output_fields_static
             .iter()
             .all(|field| !field.contains("private")));
         assert_eq!(
-            snapshot.commands[1].output_fields_observed,
+            snapshot.commands[1].output_fields_static,
             vec![
                 ".id",
                 "interface",
@@ -743,7 +795,7 @@ mod tests {
             ]
         );
         assert!(snapshot.commands[1]
-            .output_fields_observed
+            .output_fields_static
             .iter()
             .all(|field| !field.contains("preshared")));
     }

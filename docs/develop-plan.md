@@ -236,6 +236,8 @@ roswire secret set lab password --plain --stdin --allow-plain
 
 核心命令：
 
+> **实现状态说明（2026-05）：** 下表中标记「是」（访问 RouterOS）的 `--remote` 命令目前**尚未实现真实设备探测**。`schema ... --remote` 返回 `degraded` 静态快照（`degraded=true`、`REMOTE_PROBE_NOT_IMPLEMENTED` 警告、`output_fields_observed` 为空、静态字段在 `output_fields_static`）；`commands --remote` 以 `REMOTE_SCHEMA_UNAVAILABLE` 拒绝。本节描述的连接、探测、覆盖、缓存为**路线图设计**，落地前不应被理解为现有能力。
+
 | 命令 | 作用 | 是否访问 RouterOS |
 | --- | --- | --- |
 | `roswire help --json` | 输出完整命令目录、全局选项和帮助 schema | 否 |
@@ -351,6 +353,8 @@ roswire secret set lab password --plain --stdin --allow-plain
 - `doctor --include-remote --json` 才允许访问 RouterOS；普通 `help/schema/config inspect` 必须纯本地。
 
 ### 动态能力与 schema 发现
+
+> **实现状态说明（2026-05）：** 本节描述的远端只读探测、`remote_overlay` 合并、落盘缓存与 `--refresh` 重探测**均为路线图设计，尚未实现**。当前 `--remote` 行为见上文「核心命令」状态说明：返回 `degraded` 静态快照，不连接设备，不持久化缓存。下文保留为长期设计目标。
 
 RouterOS 的菜单、字段和命令会随版本、package、硬件能力和授权状态变化。把所有 schema 都硬编码进 `roswire` 会很快过期；但反过来，完全依赖设备动态返回也不可靠，因为 RouterOS 官方公开文档中没有承诺提供完整、稳定、可直接生成 OpenAPI/JSON Schema 的元数据端点。REST API 本质上是 console API 的 JSON wrapper，支持通过 `POST` 调用任意 console command，但不等于提供完整 schema 注册表。
 

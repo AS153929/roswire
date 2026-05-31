@@ -304,8 +304,8 @@ impl RosWireError {
     pub fn remote_schema_unavailable() -> Self {
         Self {
             error_code: ErrorCode::RemoteSchemaUnavailable,
-            message: "remote schema overlay is unavailable in current execution context".to_owned(),
-            hint: Some("run local static schema commands without --remote or configure remote probe support".to_owned()),
+            message: "remote command discovery is not implemented yet; `commands --remote` cannot probe a device".to_owned(),
+            hint: Some("run `roswire commands --json` for the static catalog; live device probing is on the roadmap, not a transient outage".to_owned()),
             context: ErrorContext::default(),
             exit_code: 2,
         }

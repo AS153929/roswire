@@ -271,8 +271,8 @@ Conventions:
 - `help --json` is machine-readable help with the command catalog, argument shape, examples, output schemas, error codes, and repair hints; `--help` remains for humans.
 - `config inspect --json` reports the active profile, resolved field sources, and secret status, but always redacts passwords, tokens, and private key paths.
 - `doctor --json` runs local checks by default; it reaches RouterOS only when `--include-remote` is passed.
-- Static help and schemas come from `roswire`'s built-in catalog by default. `--remote` connects to RouterOS and overlays real device version, protocol capabilities, observable fields, and runtime enum values.
-- Remote schema discovery can cache results under `~/.roswire/cache/`, but cache invalidation must include RouterOS version, build time, packages, and protocol capability; caches must never contain secrets or full local paths.
+- Static help and schemas come from `roswire`'s built-in catalog by default. `--remote` does **not** yet probe the device: it returns a `degraded` snapshot (`degraded=true`, `schema_source=["static_catalog"]`, a `REMOTE_PROBE_NOT_IMPLEMENTED` warning, and empty `output_fields_observed`). Static catalog fields are surfaced under `output_fields_static`, and `runtime_value_hints` are labelled `static_catalog_hint`/`not_exhaustive`. `commands --remote` is rejected with `REMOTE_SCHEMA_UNAVAILABLE`. Live device version, protocol-capability, observed-field, and runtime-enum probing is on the roadmap (see `docs/develop-plan.md`), not yet implemented.
+- The remote schema payload defines cache-key and TTL semantics, but on-disk caching under `~/.roswire/cache/` is not implemented yet (the `cache.status` field is computed, not persisted). When real probing lands, cache invalidation must include RouterOS version, build time, packages, and protocol capability, and caches must never contain secrets or full local paths.
 - Self-description outputs include `schema_version` so agents can make compatibility decisions.
 
 ## Protocol selection
