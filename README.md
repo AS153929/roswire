@@ -11,7 +11,7 @@
 
 Unlike traditional CLIs designed for human interaction, `roswire` does not emit colors, spinners, pagers, or interactive prompts. Its contract is simple: successful results go to `stdout`; structured errors and diagnostics go to `stderr`.
 
-> **Project status:** MVP / beta candidate. The core JSON-first CLI, configuration, protocol routing, self-description APIs, SSH file transfer, file workflows, and release engineering are in place. Production-stable status is still gated by the real RouterOS / CHR acceptance matrix. See [`docs/production-readiness.md`](docs/production-readiness.md) for production gates and [`docs/develop-plan.md`](docs/develop-plan.md) for the development plan.
+> **Project status:** MVP / beta candidate. The core JSON-first CLI, configuration, protocol routing, self-description APIs, SSH file transfer, file workflows, and release engineering are in place. Production-stable status is still gated by the real RouterOS / CHR acceptance matrix. See [`docs/roadmap.md`](docs/roadmap.md) for the milestone roadmap, [`docs/production-readiness.md`](docs/production-readiness.md) for production gates, and [`docs/develop-plan.md`](docs/develop-plan.md) for the development plan.
 
 ## Key features
 

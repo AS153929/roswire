@@ -3,7 +3,7 @@
 > 最后更新：2026-06-01
 > 基准分支：`main`
 > 已创建 backlog issues：`#60`-`#76`
-> 关联规划：[`docs/mcp-server-development-plan.md`](mcp-server-development-plan.md)
+> 关联规划：[`docs/roadmap.md`](roadmap.md)（里程碑视角）、[`docs/mcp-server-development-plan.md`](mcp-server-development-plan.md)
 
 本文是 `roswire` 的**功能总账与最终目标定义**，作用有二：
 

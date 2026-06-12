@@ -11,7 +11,7 @@
 
 与面向人类交互的传统 CLI 不同，`roswire` 不输出颜色、加载动画（spinner）、分页器（pager），也不做交互式提问。它的契约很简单：成功结果写入 `stdout`，结构化错误和诊断信息写入 `stderr`。
 
-> **项目状态：** 当前为 MVP / Beta 候选。核心 JSON-first CLI、配置、协议路由、自描述、SSH 文件传输、文件工作流和发布工程已经闭环；生产级稳定版仍受真机/CHR 矩阵阻塞。生产级门槛见 [`docs/production-readiness.md`](docs/production-readiness.md)，开发计划见 [`docs/develop-plan.md`](docs/develop-plan.md)。
+> **项目状态：** 当前为 MVP / Beta 候选。核心 JSON-first CLI、配置、协议路由、自描述、SSH 文件传输、文件工作流和发布工程已经闭环；生产级稳定版仍受真机/CHR 矩阵阻塞。里程碑路线图见 [`docs/roadmap.md`](docs/roadmap.md)，生产级门槛见 [`docs/production-readiness.md`](docs/production-readiness.md)，开发计划见 [`docs/develop-plan.md`](docs/develop-plan.md)。
 
 ## 核心特性
 
