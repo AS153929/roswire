@@ -13,6 +13,9 @@ on:
       - .github/workflows/install-script.yml
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   lint:
     name: lint (shellcheck)

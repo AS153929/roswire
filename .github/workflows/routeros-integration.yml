@@ -5,6 +5,9 @@ name: RouterOS Integration
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   routeros-docker:
     name: docker-routeros-readonly
