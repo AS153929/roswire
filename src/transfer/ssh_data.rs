@@ -9,6 +9,7 @@ pub(super) struct SshRuntimeConfig {
     pub(super) key_path: Option<String>,
     pub(super) key_passphrase: Option<String>,
     pub(super) expected_host_key: String,
+    pub(super) jump: Vec<crate::jump::ResolvedJumpHop>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,6 +20,7 @@ pub(super) struct ControlRuntimeConfig {
     pub(super) password: String,
     pub(super) selected_protocol: String,
     pub(super) tls_cert_fingerprint: Option<String>,
+    pub(super) jump: Vec<crate::jump::ResolvedJumpHop>,
 }
 
 impl ControlRuntimeConfig {

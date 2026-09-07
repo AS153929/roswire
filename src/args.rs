@@ -140,6 +140,30 @@ pub struct Cli {
     #[arg(long = "ssh-host-key")]
     pub ssh_host_key: Option<String>,
 
+    /// SSH jump host used when the RouterOS management plane is not directly reachable.
+    #[arg(long = "jump-host")]
+    pub jump_host: Option<String>,
+
+    /// SSH jump host port; defaults to 22.
+    #[arg(long = "jump-port")]
+    pub jump_port: Option<u16>,
+
+    /// SSH username on the jump host. Not reused from the RouterOS API user.
+    #[arg(long = "jump-user")]
+    pub jump_user: Option<String>,
+
+    /// SSH password on the jump host.
+    #[arg(long = "jump-password")]
+    pub jump_password: Option<String>,
+
+    /// SSH private key path for the jump host.
+    #[arg(long = "jump-key")]
+    pub jump_key: Option<String>,
+
+    /// Expected jump-host SSH key fingerprint.
+    #[arg(long = "jump-host-key")]
+    pub jump_host_key: Option<String>,
+
     /// Expected RouterOS TLS certificate fingerprint (SHA256:<base64>) for api-ssl/rest.
     #[arg(long = "tls-cert-fingerprint")]
     pub tls_cert_fingerprint: Option<String>,

@@ -98,6 +98,21 @@ impl RuntimeLogger {
         });
     }
 
+    pub fn log_jump(&mut self, event: &'static str, status: &'static str, context: Value) {
+        self.write_event(LogEvent {
+            schema_version: LOG_SCHEMA_VERSION,
+            level: self.level.clone(),
+            event,
+            command: self.command.clone(),
+            status,
+            debug: self.debug,
+            error_code: None,
+            message: None,
+            context: Some(sanitize_json_value(context)),
+            warnings: Vec::new(),
+        });
+    }
+
     pub fn log_success(&mut self) {
         self.write_event(LogEvent {
             schema_version: LOG_SCHEMA_VERSION,
@@ -479,6 +494,46 @@ level = "debug"
         assert!(!log.contains("super-secret"));
         assert!(!log.contains("/Users/example/private"));
         assert!(log.contains("***REDACTED***/id_ed25519"));
+    }
+
+    #[test]
+    fn jump_events_are_redacted_and_stable() {
+        let temp = tempfile::tempdir().expect("temp dir should be created");
+        write_config(
+            temp.path(),
+            r#"
+version = 1
+
+[logging]
+enabled = true
+retention_days = 30
+level = "info"
+"#,
+        );
+        let cli = Cli::try_parse_from(["roswire", "ip", "address", "print"]).expect("cli");
+        let env = BTreeMap::from([("ROSWIRE_HOME".to_owned(), temp.path().display().to_string())]);
+        let mut logger = initialize_for_date(&cli, &env, test_date(17));
+        logger.log_jump(
+            "jump.opened",
+            "ok",
+            serde_json::json!({
+                "hops": [{"host":"bastion.example","port":22,"user":"ops"}],
+                "password": "super-secret",
+                "local_bind": false,
+            }),
+        );
+        logger.log_jump(
+            "jump.closed",
+            "ok",
+            serde_json::json!({ "leftover": false }),
+        );
+        let log = fs::read_to_string(temp.path().join("logs/roswire-2026-05-17.log"))
+            .expect("log file should exist");
+        assert!(log.contains("\"event\":\"jump.opened\""));
+        assert!(log.contains("\"event\":\"jump.closed\""));
+        assert!(log.contains("bastion.example"));
+        assert!(!log.contains("super-secret"));
+        assert!(log.contains("***REDACTED***"));
     }
 
     #[test]

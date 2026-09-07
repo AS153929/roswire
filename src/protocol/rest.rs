@@ -2,6 +2,7 @@ use crate::error::{RosWireError, RosWireResult};
 use crate::mapping::{ActionKind, ProtocolRequest, RestMethod};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde_json::Value;
+use std::io::{Read, Write};
 use std::time::Duration;
 
 #[derive(Clone)]
@@ -242,6 +243,291 @@ fn basic_auth_header(user: &str, password: &str) -> String {
     format!("Basic {}", BASE64_STANDARD.encode(credentials))
 }
 
+struct StreamHttpRequest<'a> {
+    host: &'a str,
+    port: u16,
+    user: &'a str,
+    password: &'a str,
+    method: RestMethod,
+    path: &'a str,
+    body: Option<&'a Value>,
+}
+
+pub fn execute_request_on_stream<S: Read + Write>(
+    stream: &mut S,
+    host: &str,
+    port: u16,
+    user: &str,
+    password: &str,
+    request: &ProtocolRequest,
+) -> RosWireResult<Value> {
+    let rest_request = rest_execution_request(request)?;
+    exchange_http(
+        stream,
+        StreamHttpRequest {
+            host,
+            port,
+            user,
+            password,
+            method: rest_request.method,
+            path: &rest_request.path,
+            body: rest_request.body.as_ref(),
+        },
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn send_on_stream<S: Read + Write>(
+    stream: &mut S,
+    host: &str,
+    port: u16,
+    user: &str,
+    password: &str,
+    method: RestMethod,
+    path: &str,
+    body: Option<&Value>,
+) -> RosWireResult<Value> {
+    exchange_http(
+        stream,
+        StreamHttpRequest {
+            host,
+            port,
+            user,
+            password,
+            method,
+            path,
+            body,
+        },
+    )
+}
+
+pub fn get_on_stream<S: Read + Write>(
+    stream: &mut S,
+    host: &str,
+    port: u16,
+    user: &str,
+    password: &str,
+    path: &str,
+) -> RosWireResult<Value> {
+    exchange_http(
+        stream,
+        StreamHttpRequest {
+            host,
+            port,
+            user,
+            password,
+            method: RestMethod::Get,
+            path,
+            body: None,
+        },
+    )
+}
+
+fn exchange_http<S: Read + Write>(
+    stream: &mut S,
+    request: StreamHttpRequest<'_>,
+) -> RosWireResult<Value> {
+    let payload = match request.body {
+        Some(body) => Some(serde_json::to_string(body).map_err(|error| {
+            Box::new(RosWireError::internal(format!(
+                "failed to serialize RouterOS REST request body: {error}",
+            )))
+        })?),
+        None => None,
+    };
+    let host_header = if request.port == 443 {
+        url_host_authority(request.host)
+    } else {
+        format!("{}:{}", url_host_authority(request.host), request.port)
+    };
+    let path = if request.path.starts_with('/') {
+        request.path.to_owned()
+    } else {
+        format!("/{}", request.path)
+    };
+    let mut message = format!(
+        "{} {} HTTP/1.1\r\nHost: {}\r\nAuthorization: {}\r\nAccept: application/json\r\nConnection: close\r\n",
+        request.method.as_str(),
+        path,
+        host_header,
+        basic_auth_header(request.user, request.password),
+    );
+    if let Some(payload) = &payload {
+        message.push_str(&format!(
+            "Content-Type: application/json\r\nContent-Length: {}\r\n",
+            payload.len()
+        ));
+    } else {
+        message.push_str("Content-Length: 0\r\n");
+    }
+    message.push_str("\r\n");
+    if let Some(payload) = &payload {
+        message.push_str(payload);
+    }
+    stream.write_all(message.as_bytes()).map_err(|error| {
+        Box::new(RosWireError::network(format!(
+            "failed to write RouterOS REST request: {error}",
+        )))
+    })?;
+    stream.flush().ok();
+
+    let (status, body) = read_http_response(stream)?;
+    if !(200..300).contains(&status) {
+        return Err(Box::new(map_status_error(status, body)));
+    }
+    if request.method != RestMethod::Get && body.trim().is_empty() {
+        return Ok(serde_json::json!({ "status": "ok" }));
+    }
+    serde_json::from_str(&body).map_err(|error| {
+        Box::new(RosWireError::ros_api_failure(format!(
+            "RouterOS REST response is not valid JSON: {error}",
+        )))
+    })
+}
+
+fn read_http_response<S: Read>(stream: &mut S) -> RosWireResult<(u16, String)> {
+    let mut buffer = Vec::new();
+    let mut chunk = [0_u8; 1024];
+    loop {
+        let read = stream.read(&mut chunk).map_err(|error| {
+            Box::new(RosWireError::network(format!(
+                "failed to read RouterOS REST response: {error}",
+            )))
+        })?;
+        if read == 0 {
+            break;
+        }
+        buffer.extend_from_slice(&chunk[..read]);
+        if buffer.windows(4).any(|window| window == b"\r\n\r\n") {
+            break;
+        }
+        if buffer.len() > 1024 * 1024 {
+            return Err(Box::new(RosWireError::network(
+                "RouterOS REST response headers exceeded 1 MiB",
+            )));
+        }
+    }
+
+    let header_end = buffer
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .ok_or_else(|| {
+            Box::new(RosWireError::network(
+                "RouterOS REST response is missing header terminator",
+            ))
+        })?;
+    let header_bytes = &buffer[..header_end];
+    let mut body = buffer[header_end + 4..].to_vec();
+    let headers = String::from_utf8_lossy(header_bytes);
+    let mut lines = headers.split("\r\n");
+    let status_line = lines.next().unwrap_or_default();
+    let status = status_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|value| value.parse::<u16>().ok())
+        .ok_or_else(|| {
+            Box::new(RosWireError::network(format!(
+                "RouterOS REST returned an invalid status line: {status_line}",
+            )))
+        })?;
+
+    let mut content_length = None;
+    let mut chunked = false;
+    for line in lines {
+        let (name, value) = match line.split_once(':') {
+            Some(parts) => parts,
+            None => continue,
+        };
+        if name.eq_ignore_ascii_case("Content-Length") {
+            content_length = value.trim().parse::<usize>().ok();
+        }
+        if name.eq_ignore_ascii_case("Transfer-Encoding")
+            && value.to_ascii_lowercase().contains("chunked")
+        {
+            chunked = true;
+        }
+    }
+
+    if let Some(length) = content_length {
+        while body.len() < length {
+            let read = stream.read(&mut chunk).map_err(|error| {
+                Box::new(RosWireError::network(format!(
+                    "failed to read RouterOS REST body: {error}",
+                )))
+            })?;
+            if read == 0 {
+                break;
+            }
+            body.extend_from_slice(&chunk[..read]);
+        }
+        body.truncate(length);
+    } else if chunked {
+        // Continue reading until the stream closes; RouterOS jump REST uses Connection: close.
+        loop {
+            let read = stream.read(&mut chunk).map_err(|error| {
+                Box::new(RosWireError::network(format!(
+                    "failed to read RouterOS REST chunked body: {error}",
+                )))
+            })?;
+            if read == 0 {
+                break;
+            }
+            body.extend_from_slice(&chunk[..read]);
+        }
+        body = decode_chunked_body(&body)?;
+    } else {
+        loop {
+            let read = stream.read(&mut chunk).map_err(|error| {
+                Box::new(RosWireError::network(format!(
+                    "failed to read RouterOS REST body: {error}",
+                )))
+            })?;
+            if read == 0 {
+                break;
+            }
+            body.extend_from_slice(&chunk[..read]);
+        }
+    }
+
+    String::from_utf8(body)
+        .map(|body| (status, body))
+        .map_err(|error| {
+            Box::new(RosWireError::network(format!(
+                "RouterOS REST body is not valid UTF-8: {error}",
+            )))
+        })
+}
+
+fn decode_chunked_body(input: &[u8]) -> RosWireResult<Vec<u8>> {
+    let mut rest = input;
+    let mut out = Vec::new();
+    while let Some(idx) = rest.windows(2).position(|window| window == b"\r\n") {
+        let size_line = std::str::from_utf8(&rest[..idx]).map_err(|error| {
+            Box::new(RosWireError::network(format!(
+                "invalid RouterOS REST chunk size: {error}",
+            )))
+        })?;
+        let size = usize::from_str_radix(size_line.trim(), 16).map_err(|error| {
+            Box::new(RosWireError::network(format!(
+                "invalid RouterOS REST chunk size: {error}",
+            )))
+        })?;
+        rest = &rest[idx + 2..];
+        if size == 0 {
+            break;
+        }
+        if rest.len() < size {
+            break;
+        }
+        out.extend_from_slice(&rest[..size]);
+        rest = &rest[size..];
+        if rest.starts_with(b"\r\n") {
+            rest = &rest[2..];
+        }
+    }
+    Ok(out)
+}
+
 fn request_body(method: RestMethod, request: &ProtocolRequest) -> Option<Value> {
     match method {
         RestMethod::Get | RestMethod::Delete => None,
@@ -301,8 +587,9 @@ fn expand_rest_path(
 #[cfg(test)]
 mod tests {
     use super::{
-        basic_auth_header, build_url, https_base_url, map_status_error, request_body,
-        rest_execution_request, routeros_error_message, RestClient,
+        basic_auth_header, build_url, decode_chunked_body, execute_request_on_stream,
+        get_on_stream, https_base_url, map_status_error, request_body, rest_execution_request,
+        routeros_error_message, send_on_stream, RestClient,
     };
     use crate::args::ParsedInvocation;
     use crate::error::ErrorCode;
@@ -400,6 +687,111 @@ mod tests {
         assert_eq!(value["version"], "7.15.3");
         assert!(request.contains("GET /rest/system/resource HTTP/1.1"));
         assert!(request.contains("Authorization: Basic"));
+    }
+
+    #[test]
+    fn stream_http_get_and_post_cover_jump_rest_client() {
+        let server = TestServer::responding_with(200, "application/json", r#"{"version":"7.16"}"#);
+        let mut stream = TcpStream::connect(&server.address).expect("connect");
+        let value = get_on_stream(
+            &mut stream,
+            "router.example",
+            443,
+            "admin",
+            "secret",
+            "/rest/system/resource",
+        )
+        .expect("get");
+        assert_eq!(value["version"], "7.16");
+        let request = server.request();
+        assert!(request.contains("GET /rest/system/resource HTTP/1.1"));
+        assert!(request.contains("Host: router.example"));
+
+        let server = TestServer::responding_with(204, "application/json", "");
+        let mut stream = TcpStream::connect(&server.address).expect("connect");
+        let value = send_on_stream(
+            &mut stream,
+            "192.0.2.1",
+            8443,
+            "admin",
+            "secret",
+            RestMethod::Post,
+            "rest/import",
+            Some(&serde_json::json!({"file-name": "a.rsc"})),
+        )
+        .expect("post");
+        assert_eq!(value["status"], "ok");
+        let request = server.request();
+        assert!(request.contains("POST /rest/import HTTP/1.1"));
+        assert!(request.contains("Host: 192.0.2.1:8443"));
+
+        let server = TestServer::responding_with(401, "application/json", r#"{"detail":"denied"}"#);
+        let mut stream = TcpStream::connect(&server.address).expect("connect");
+        let error = get_on_stream(
+            &mut stream,
+            "router.example",
+            443,
+            "admin",
+            "secret",
+            "/rest/system/resource",
+        )
+        .expect_err("auth");
+        assert_eq!(error.error_code, ErrorCode::AuthFailed);
+        let _ = server.request();
+    }
+
+    #[test]
+    fn stream_http_executes_mapped_print_and_decodes_chunks() {
+        let server = TestServer::responding_with(200, "application/json", r#"[{".id":"*1"}]"#);
+        let mut stream = TcpStream::connect(&server.address).expect("connect");
+        let request = build_protocol_request(&ParsedInvocation {
+            path: vec!["ip".to_owned(), "address".to_owned()],
+            action: "print".to_owned(),
+            resolved_args: BTreeMap::new(),
+            flags: Vec::new(),
+        })
+        .expect("map");
+        let value = execute_request_on_stream(
+            &mut stream,
+            "router.example",
+            443,
+            "admin",
+            "secret",
+            &request,
+        )
+        .expect("print");
+        assert_eq!(value[0][".id"], "*1");
+        let _ = server.request();
+
+        let decoded = decode_chunked_body(b"5\r\nhello\r\n0\r\n\r\n").expect("chunked");
+        assert_eq!(decoded, b"hello");
+    }
+
+    #[test]
+    fn stream_http_reads_chunked_response_body() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let address = listener.local_addr().expect("addr").to_string();
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let _ = read_request(&mut stream);
+            let body = "5\r\n{\"a\":\r\n2\r\n1}\r\n0\r\n\r\n";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{body}"
+            );
+            stream.write_all(response.as_bytes()).expect("write");
+        });
+        let mut stream = TcpStream::connect(&address).expect("connect");
+        let value = get_on_stream(
+            &mut stream,
+            "router.example",
+            443,
+            "admin",
+            "secret",
+            "/rest/system/resource",
+        )
+        .expect("chunked json");
+        assert_eq!(value["a"], 1);
+        handle.join().expect("server");
     }
 
     #[test]

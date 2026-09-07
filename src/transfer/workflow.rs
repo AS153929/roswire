@@ -145,46 +145,52 @@ impl WorkflowBackend for LiveWorkflowBackend {
         timeout: Duration,
         context: &ErrorContext,
     ) -> RosWireResult<()> {
-        let session = open_ssh_session(&self.ssh, &self.policy, context)?;
-        let sftp = session.sftp().map_err(|error| {
-            Box::new(
-                RosWireError::file_transfer_failed(format!("failed to open SFTP session: {error}"))
-                    .with_context(context.clone()),
-            )
-        })?;
-        let deadline = Instant::now() + timeout;
-        loop {
-            if sftp.stat(Path::new(remote)).is_ok() {
-                return Ok(());
-            }
-            if Instant::now() >= deadline {
-                return Err(Box::new(
-                    RosWireError::ros_api_failure(format!(
-                        "timed out waiting for remote file: {}",
-                        redact_remote_path(remote)
+        with_ssh_session(&self.ssh, &self.policy, context, |session| {
+            let sftp = session.sftp().map_err(|error| {
+                Box::new(
+                    RosWireError::file_transfer_failed(format!(
+                        "failed to open SFTP session: {error}"
                     ))
                     .with_context(context.clone()),
-                ));
+                )
+            })?;
+            let deadline = Instant::now() + timeout;
+            loop {
+                if sftp.stat(Path::new(remote)).is_ok() {
+                    return Ok(());
+                }
+                if Instant::now() >= deadline {
+                    return Err(Box::new(
+                        RosWireError::ros_api_failure(format!(
+                            "timed out waiting for remote file: {}",
+                            redact_remote_path(remote)
+                        ))
+                        .with_context(context.clone()),
+                    ));
+                }
+                thread::sleep(WORKFLOW_FILE_WAIT_INTERVAL);
             }
-            thread::sleep(WORKFLOW_FILE_WAIT_INTERVAL);
-        }
+        })
     }
 
     fn remove_remote_file(&mut self, remote: &str, context: &ErrorContext) -> RosWireResult<()> {
-        let session = open_ssh_session(&self.ssh, &self.policy, context)?;
-        let sftp = session.sftp().map_err(|error| {
-            Box::new(
-                RosWireError::file_transfer_failed(format!("failed to open SFTP session: {error}"))
+        with_ssh_session(&self.ssh, &self.policy, context, |session| {
+            let sftp = session.sftp().map_err(|error| {
+                Box::new(
+                    RosWireError::file_transfer_failed(format!(
+                        "failed to open SFTP session: {error}"
+                    ))
                     .with_context(context.clone()),
-            )
-        })?;
-        sftp.unlink(Path::new(remote)).map_err(|error| {
-            Box::new(
-                RosWireError::file_transfer_failed(format!(
-                    "failed to remove remote file: {error}"
-                ))
-                .with_context(context.clone()),
-            )
+                )
+            })?;
+            sftp.unlink(Path::new(remote)).map_err(|error| {
+                Box::new(
+                    RosWireError::file_transfer_failed(format!(
+                        "failed to remove remote file: {error}"
+                    ))
+                    .with_context(context.clone()),
+                )
+            })
         })
     }
 

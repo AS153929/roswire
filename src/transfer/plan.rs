@@ -11,6 +11,8 @@ pub struct TransferPlan {
     pub paths: TransferPaths,
     pub cleanup: TransferCleanup,
     pub steps: Vec<TransferStep>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub via: Option<crate::jump::JumpViaPlan>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -190,7 +192,13 @@ pub(super) fn build_plan_for_env(
     let ssh = resolve_ssh_transfer_summary(cli, env, profile.as_ref())?;
 
     Ok(plan_from_command(
-        command, backend, allow_from, ssh, cli, &policy,
+        command,
+        backend,
+        allow_from,
+        ssh,
+        cli,
+        &policy,
+        profile.as_ref(),
     ))
 }
 
@@ -218,6 +226,7 @@ pub(super) fn plan_from_command(
     ssh: SshTransferSummary,
     cli: &Cli,
     policy: &TransferPolicy,
+    profile: Option<&config::ProfileConfig>,
 ) -> TransferPlan {
     let mut cleanup_remote_paths = Vec::new();
     let mut cleanup_local_paths = Vec::new();
@@ -293,6 +302,14 @@ pub(super) fn plan_from_command(
             }
         }
     };
+    let jump_target_port = ssh.port;
+    let via = crate::jump::JumpViaPlan::from_hops(
+        crate::jump::resolve_jump_identities(cli, profile).unwrap_or_default(),
+        cli.host
+            .clone()
+            .or_else(|| profile.and_then(|profile| profile.host.clone())),
+        Some(jump_target_port),
+    );
 
     TransferPlan {
         schema_version: PLAN_SCHEMA_VERSION,
@@ -320,6 +337,7 @@ pub(super) fn plan_from_command(
         },
         steps: plan_steps(&command, cli),
         paths,
+        via,
     }
 }
 

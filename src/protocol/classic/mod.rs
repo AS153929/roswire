@@ -21,6 +21,10 @@ impl<S: ApiStream> ClassicApiSession<S> {
         Self { stream }
     }
 
+    pub fn into_inner(self) -> S {
+        self.stream
+    }
+
     pub fn login(&mut self, user: &str, password: &str) -> RosWireResult<()> {
         login::login(&mut self.stream, user, password)
     }

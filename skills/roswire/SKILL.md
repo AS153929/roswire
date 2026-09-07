@@ -14,7 +14,7 @@ roswire --json <command tokens...>
 roswire --json --profile <profile> <command tokens...>
 ```
 
-Unless a schema explicitly shows that a flag belongs to a specific command, place global options before command tokens, for example `--json`, `--profile`, `--host`, `--user`, `--protocol`, `--routeros-version`, `--dry-run`, `--remote`, and `--refresh`.
+Unless a schema explicitly shows that a flag belongs to a specific command, place global options before command tokens, for example `--json`, `--profile`, `--host`, `--user`, `--protocol`, `--routeros-version`, `--dry-run`, `--remote`, `--refresh`, and `--jump-host`.
 
 Use these safe defaults:
 
@@ -259,3 +259,20 @@ roswire --json doctor
 ```
 
 If a remote check fails, summarize `error_code`, `selected_protocol`, warnings, and whether the failure happened before or after remote login. Use `--debug` only when more diagnostics are necessary, and avoid exposing credentials or secret values from logs.
+
+## SSH jump (unreachable devices)
+
+When RouterOS is not directly reachable, use an explicit SSH jump. Do not build `ssh -L` tunnels or use sshx port forwarding.
+
+```bash
+roswire --json --dry-run --jump-host bastion.example --jump-user ops --jump-host-key SHA256:... ip address print
+roswire --json --profile <profile> doctor
+```
+
+Rules:
+
+- Jump must be configured (`--jump-host` or profile `[[jump]]`); never auto-probe a bastion.
+- Pin `--jump-host-key` / `host_key`. Missing pin returns `JUMP_HOST_KEY_REQUIRED`.
+- The process opens `direct-tcpip`, runs the command, then tears the channel down. Teardown failure is `JUMP_TEARDOWN_FAILED` with `leftover=true`.
+- Dry-run plans include `via.kind=jump` and `local_bind=false`.
+- Record hop identity in summaries; never record jump passwords or private key paths.

@@ -1,6 +1,6 @@
 use crate::args::Cli;
 use crate::config::{self, ConfigFile, ConfigInspectPaths, ConfigPaths, SecretInspectField};
-use crate::error::{ErrorCode, RosWireError, RosWireResult};
+use crate::error::{ErrorCode, ErrorContext, RosWireError, RosWireResult};
 use crate::protocol::classic::{
     transport::{TcpApiStream, TlsApiStream},
     ClassicApiSession,
@@ -19,7 +19,29 @@ pub struct DoctorPayload {
     pub selected_protocol: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub routeros_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub jump: Option<JumpDoctor>,
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JumpDoctor {
+    pub configured: bool,
+    pub local_bind: bool,
+    pub teardown: &'static str,
+    pub hops: Vec<crate::jump::JumpHopIdentity>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub legs: Vec<JumpLegDoctor>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JumpLegDoctor {
+    pub role: String,
+    pub host: String,
+    pub port: u16,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -79,13 +101,76 @@ pub fn doctor_payload(cli: &Cli) -> RosWireResult<String> {
         warnings.extend(remote.warnings.clone());
     }
 
+    let jump = jump_doctor(cli, remote.as_ref());
     render_json(&DoctorPayload {
         schema_version: "roswire.doctor.v1",
         local,
         remote,
         selected_protocol,
         routeros_version,
+        jump,
         warnings,
+    })
+}
+
+fn jump_doctor(cli: &Cli, remote: Option<&RemoteDoctor>) -> Option<JumpDoctor> {
+    let env = read_env_map();
+    let paths = ConfigPaths::from_home(crate::config::resolve_home_path(
+        env.get("ROSWIRE_HOME").map(String::as_str),
+    ));
+    let profile = if paths.config.exists() {
+        crate::config::load_config_file(&paths.config)
+            .ok()
+            .and_then(|config| {
+                let name =
+                    crate::config::select_active_profile(cli.profile.as_deref(), &config).ok()?;
+                config.profiles.get(&name).cloned()
+            })
+    } else {
+        None
+    };
+    let hops = crate::jump::resolve_jump_identities(cli, profile.as_ref()).unwrap_or_default();
+    if hops.is_empty() {
+        return None;
+    }
+    let mut legs = Vec::new();
+    if cli.include_remote {
+        if let Some(first) = hops.first() {
+            let bastion_ok =
+                crate::jump::tcp_probe(&first.host, first.port, Duration::from_secs(3)).is_ok();
+            legs.push(JumpLegDoctor {
+                role: "bastion".to_owned(),
+                host: first.host.clone(),
+                port: first.port,
+                status: if bastion_ok {
+                    "ok".to_owned()
+                } else {
+                    "error".to_owned()
+                },
+                error_code: (!bastion_ok).then(|| "NETWORK_ERROR".to_owned()),
+            });
+        }
+        if let Some(remote) = remote {
+            let host = cli
+                .host
+                .clone()
+                .or_else(|| profile.and_then(|p| p.host))
+                .unwrap_or_default();
+            legs.push(JumpLegDoctor {
+                role: "target".to_owned(),
+                host,
+                port: 0,
+                status: remote.status.clone(),
+                error_code: remote.error_code.clone(),
+            });
+        }
+    }
+    Some(JumpDoctor {
+        configured: true,
+        local_bind: false,
+        teardown: "process-exit",
+        hops,
+        legs,
     })
 }
 
@@ -166,6 +251,10 @@ fn remote_doctor(cli: &Cli) -> RemoteDoctor {
         Err(error) => return remote_error("unknown", &error),
     };
 
+    if !target.jump.is_empty() {
+        return remote_doctor_via_jump(&target);
+    }
+
     match target.requested_protocol.as_str() {
         "auto" => return remote_doctor_auto(&target),
         "rest" => {
@@ -226,6 +315,105 @@ fn remote_doctor_auto(target: &crate::ExecutionTarget) -> RemoteDoctor {
         Err(error) => return remote_error("api", &error),
     };
     probe_classic_remote(stream, &target.user, &target.password, "api")
+}
+
+fn remote_doctor_via_jump(target: &crate::ExecutionTarget) -> RemoteDoctor {
+    match target.requested_protocol.as_str() {
+        "auto" => remote_doctor_auto_jump(target),
+        "rest" => remote_doctor_rest_jump(target, target.port),
+        "api-ssl" => match jump_tls_stream(target, target.port) {
+            Ok(stream) => probe_classic_remote(stream, &target.user, &target.password, "api-ssl"),
+            Err(error) => remote_error("api-ssl", &error),
+        },
+        _ => match jump_plain_stream(target, target.port) {
+            Ok(stream) => probe_classic_remote(stream, &target.user, &target.password, "api"),
+            Err(error) => remote_error("api", &error),
+        },
+    }
+}
+
+fn remote_doctor_auto_jump(target: &crate::ExecutionTarget) -> RemoteDoctor {
+    match remote_doctor_rest_jump_result(target, crate::default_port("rest")) {
+        Ok(remote) => return remote,
+        Err(error) if error.error_code == ErrorCode::AuthFailed => {
+            return remote_error("rest", &error)
+        }
+        Err(_) => {}
+    }
+    match jump_tls_stream(target, crate::default_port("api-ssl")) {
+        Ok(stream) => {
+            return probe_classic_remote(stream, &target.user, &target.password, "api-ssl")
+        }
+        Err(error) if error.error_code == ErrorCode::AuthFailed => {
+            return remote_error("api-ssl", &error)
+        }
+        Err(_) => {}
+    }
+    match jump_plain_stream(target, crate::default_port("api")) {
+        Ok(stream) => probe_classic_remote(stream, &target.user, &target.password, "api"),
+        Err(error) => remote_error("api", &error),
+    }
+}
+
+fn remote_doctor_rest_jump(target: &crate::ExecutionTarget, port: u16) -> RemoteDoctor {
+    match remote_doctor_rest_jump_result(target, port) {
+        Ok(remote) => remote,
+        Err(error) => remote_error("rest", &error),
+    }
+}
+
+fn remote_doctor_rest_jump_result(
+    target: &crate::ExecutionTarget,
+    port: u16,
+) -> Result<RemoteDoctor, Box<RosWireError>> {
+    let io = crate::jump::open_channel(
+        &target.jump,
+        &target.host,
+        port,
+        target.connect_timeout,
+        &ErrorContext {
+            host: target.host.clone(),
+            ..ErrorContext::default()
+        },
+    )?;
+    let mut tls = crate::protocol::classic::transport::wrap_tls_stream(
+        io,
+        &target.host,
+        &target.tls_trust(),
+    )?;
+    let value = crate::protocol::rest::get_on_stream(
+        &mut tls,
+        &target.host,
+        port,
+        &target.user,
+        &target.password,
+        "/rest/system/resource",
+    )?;
+    Ok(remote_doctor_from_rest_resource("rest", &value))
+}
+
+fn jump_plain_stream(
+    target: &crate::ExecutionTarget,
+    port: u16,
+) -> RosWireResult<crate::jump::JumpIo> {
+    crate::jump::open_channel(
+        &target.jump,
+        &target.host,
+        port,
+        target.connect_timeout,
+        &ErrorContext {
+            host: target.host.clone(),
+            ..ErrorContext::default()
+        },
+    )
+}
+
+fn jump_tls_stream(
+    target: &crate::ExecutionTarget,
+    port: u16,
+) -> RosWireResult<crate::protocol::classic::transport::TlsStream<crate::jump::JumpIo>> {
+    let io = jump_plain_stream(target, port)?;
+    crate::protocol::classic::transport::wrap_tls_stream(io, &target.host, &target.tls_trust())
 }
 
 fn remote_doctor_rest(target: &crate::ExecutionTarget, port: u16) -> RemoteDoctor {
@@ -345,6 +533,7 @@ fn local_dependencies() -> BTreeMap<String, String> {
         ),
         ("keychain_backend".to_owned(), "available".to_owned()),
         ("ssh_transfer_dry_run".to_owned(), "available".to_owned()),
+        ("jump_direct_tcpip".to_owned(), "available".to_owned()),
         (
             "ssh_transfer_runtime".to_owned(),
             "not_implemented".to_owned(),
@@ -426,6 +615,10 @@ mod tests {
             dependencies
                 .get("remote_schema_overlay")
                 .map(String::as_str),
+            Some("available"),
+        );
+        assert_eq!(
+            dependencies.get("jump_direct_tcpip").map(String::as_str),
             Some("available"),
         );
     }

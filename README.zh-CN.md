@@ -21,6 +21,7 @@
 - **协议与方言分层**：支持 RouterOS 原生 API（`8728`/`8729`）的 v6/v7 方言，以及 RouterOS v7 REST API。
 - **单个原生二进制目标**：以一个 Rust 二进制文件发布，不要求 Node.js/Python/Go 等外部运行时。
 - **便于 Agent 自我修正**：错误包含稳定错误码、脱敏上下文和可选修复提示。
+- **SSH 跳板不留隧道**：管理面不可达时，可显式走 SSH `direct-tcpip`；进程退出即拆除，并写入 JSONL 审计。不使用本地 `ssh -L`。
 
 ## 安装
 
@@ -152,6 +153,7 @@ roswire --profile studio interface print --json
 | 查看接口、地址、路由和资源 | `roswire --profile studio interface print --json`、`roswire --profile studio ip address print --json`、`roswire --profile studio ip route print --json`、`roswire --profile studio system resource print --json` |
 | 执行未内置的只读 RouterOS print 命令 | `roswire --profile studio raw /system/resource/print --json` |
 | 安全预览文件传输 | `roswire --profile studio file upload ./setup.rsc flash/setup.rsc --dry-run --ssh-host-key SHA256:replace-with-routeros-host-key --allow-from 203.0.113.10/32 --json` |
+| 经 SSH 跳板访问内网 RouterOS | 在 profile 设置 `jump_host` / `jump_host_key` 后执行 `roswire --profile studio --dry-run ip address print --json` |
 
 ## 命令使用示例
 

@@ -2,6 +2,7 @@ pub mod args;
 pub mod config;
 pub mod error;
 pub mod introspect;
+pub mod jump;
 pub mod logging;
 pub mod mapping;
 pub mod protocol;
@@ -32,7 +33,7 @@ pub fn run() -> RosWireResult<()> {
     }
     logger.log_start();
 
-    let result = run_with_cli(&cli);
+    let result = run_with_cli(&cli, &mut logger);
     match &result {
         Ok(()) => logger.log_success(),
         Err(error) => logger.log_error(error),
@@ -41,7 +42,7 @@ pub fn run() -> RosWireResult<()> {
     result
 }
 
-fn run_with_cli(cli: &Cli) -> RosWireResult<()> {
+fn run_with_cli(cli: &Cli, logger: &mut logging::RuntimeLogger) -> RosWireResult<()> {
     if cli.simulate_error {
         return Err(Box::new(
             error::RosWireError::usage("simulated usage error for contract tests")
@@ -68,7 +69,7 @@ fn run_with_cli(cli: &Cli) -> RosWireResult<()> {
                 return Ok(());
             }
             workflow::WorkflowResult::Invocation(invocation) => {
-                return execute_invocation(invocation, cli);
+                return execute_invocation(invocation, cli, logger);
             }
         }
     }
@@ -80,10 +81,14 @@ fn run_with_cli(cli: &Cli) -> RosWireResult<()> {
     }
 
     let invocation = args::parse_invocation(&cli.tokens)?;
-    execute_invocation(invocation, cli)
+    execute_invocation(invocation, cli, logger)
 }
 
-fn execute_invocation(invocation: args::ParsedInvocation, cli: &Cli) -> RosWireResult<()> {
+fn execute_invocation(
+    invocation: args::ParsedInvocation,
+    cli: &Cli,
+    logger: &mut logging::RuntimeLogger,
+) -> RosWireResult<()> {
     let request = mapping::build_protocol_request(&invocation)?;
     if cli.dry_run {
         let payload = render_command_plan(&invocation, &request, cli)?;
@@ -95,18 +100,18 @@ fn execute_invocation(invocation: args::ParsedInvocation, cli: &Cli) -> RosWireR
 
     let target = resolve_execution_target(cli)?;
     if target.requested_protocol == "auto" {
-        return execute_auto(&invocation, &request, &target);
+        return execute_auto(&invocation, &request, &target, logger);
     }
 
     if target.requested_protocol == "rest" {
-        return execute_rest(&invocation, &request, &target, target.port, "rest");
+        return execute_rest(&invocation, &request, &target, target.port, "rest", logger);
     }
 
     if target.requested_protocol == "api-ssl" {
-        return execute_api_ssl(&invocation, &request, &target, target.port);
+        return execute_api_ssl(&invocation, &request, &target, target.port, logger);
     }
 
-    execute_api(&invocation, &request, &target, target.port)
+    execute_api(&invocation, &request, &target, target.port, logger)
 }
 
 fn validate_raw_safety(
@@ -141,6 +146,7 @@ fn execute_auto(
     invocation: &args::ParsedInvocation,
     request: &ProtocolRequest,
     target: &ExecutionTarget,
+    logger: &mut logging::RuntimeLogger,
 ) -> RosWireResult<()> {
     let probe = LiveProtocolProbe { request, target };
     let decision = with_context(
@@ -154,13 +160,20 @@ fn execute_auto(
     )?;
 
     match decision.selected_protocol {
-        SelectedProtocol::Rest => {
-            execute_rest(invocation, request, target, default_port("rest"), "rest")
-        }
+        SelectedProtocol::Rest => execute_rest(
+            invocation,
+            request,
+            target,
+            default_port("rest"),
+            "rest",
+            logger,
+        ),
         SelectedProtocol::ApiSsl => {
-            execute_api_ssl(invocation, request, target, default_port("api-ssl"))
+            execute_api_ssl(invocation, request, target, default_port("api-ssl"), logger)
         }
-        SelectedProtocol::Api => execute_api(invocation, request, target, default_port("api")),
+        SelectedProtocol::Api => {
+            execute_api(invocation, request, target, default_port("api"), logger)
+        }
     }
 }
 
@@ -170,16 +183,35 @@ fn execute_rest(
     target: &ExecutionTarget,
     port: u16,
     selected_protocol: &str,
+    logger: &mut logging::RuntimeLogger,
 ) -> RosWireResult<()> {
     let context = execution_context(invocation, target, selected_protocol);
-    let client = RestClient::https(
-        &target.host,
-        port,
-        &target.user,
-        &target.password,
-        &target.tls_trust(),
-    )?;
-    let value = with_context(client.execute_request(request), context)?;
+    let value = if target.jump.is_empty() {
+        let client = RestClient::https(
+            &target.host,
+            port,
+            &target.user,
+            &target.password,
+            &target.tls_trust(),
+        )?;
+        with_context(client.execute_request(request), context)?
+    } else {
+        with_jump_stream(target, port, &context, logger, |io| {
+            let mut tls = protocol::classic::transport::wrap_tls_stream(
+                io,
+                &target.host,
+                &target.tls_trust(),
+            )?;
+            protocol::rest::execute_request_on_stream(
+                &mut tls,
+                &target.host,
+                port,
+                &target.user,
+                &target.password,
+                request,
+            )
+        })?
+    };
     let payload = render_protocol_payload(request, selected_protocol, &value)?;
     println!("{payload}");
 
@@ -191,18 +223,35 @@ fn execute_api_ssl(
     request: &ProtocolRequest,
     target: &ExecutionTarget,
     port: u16,
+    logger: &mut logging::RuntimeLogger,
 ) -> RosWireResult<()> {
     let context = execution_context(invocation, target, "api-ssl");
-    let stream = with_context(
-        TlsApiStream::connect(
-            &target.host,
-            port,
-            Duration::from_secs(10),
-            &target.tls_trust(),
-        ),
-        context.clone(),
-    )?;
-    execute_classic_stream(stream, request, &target.user, &target.password, context)
+    if target.jump.is_empty() {
+        let stream = with_context(
+            TlsApiStream::connect(
+                &target.host,
+                port,
+                Duration::from_secs(10),
+                &target.tls_trust(),
+            ),
+            context.clone(),
+        )?;
+        return execute_classic_stream(stream, request, &target.user, &target.password, context);
+    }
+
+    let payload = with_jump_stream(target, port, &context, logger, |io| {
+        let stream =
+            protocol::classic::transport::wrap_tls_stream(io, &target.host, &target.tls_trust())?;
+        classic_payload(
+            stream,
+            request,
+            &target.user,
+            &target.password,
+            context.clone(),
+        )
+    })?;
+    println!("{payload}");
+    Ok(())
 }
 
 fn execute_api(
@@ -210,13 +259,22 @@ fn execute_api(
     request: &ProtocolRequest,
     target: &ExecutionTarget,
     port: u16,
+    logger: &mut logging::RuntimeLogger,
 ) -> RosWireResult<()> {
     let context = execution_context(invocation, target, "api");
-    let stream = with_context(
-        TcpApiStream::connect(&target.host, port, Duration::from_secs(10)),
-        context.clone(),
-    )?;
-    execute_classic_stream(stream, request, &target.user, &target.password, context)
+    if target.jump.is_empty() {
+        let stream = with_context(
+            TcpApiStream::connect(&target.host, port, Duration::from_secs(10)),
+            context.clone(),
+        )?;
+        return execute_classic_stream(stream, request, &target.user, &target.password, context);
+    }
+
+    let payload = with_jump_stream(target, port, &context, logger, |io| {
+        classic_payload(io, request, &target.user, &target.password, context.clone())
+    })?;
+    println!("{payload}");
+    Ok(())
 }
 
 fn execute_classic_stream<S: ApiStream>(
@@ -226,14 +284,56 @@ fn execute_classic_stream<S: ApiStream>(
     password: &str,
     context: ErrorContext,
 ) -> RosWireResult<()> {
+    let payload = classic_payload(stream, request, user, password, context)?;
+    println!("{payload}");
+    Ok(())
+}
+
+fn classic_payload<S: ApiStream>(
+    stream: S,
+    request: &ProtocolRequest,
+    user: &str,
+    password: &str,
+    context: ErrorContext,
+) -> RosWireResult<String> {
     let mut session = ClassicApiSession::new(stream);
     let selected_protocol = context.selected_protocol.clone();
     with_context(session.login(user, password), context.clone())?;
     let rows = with_context(session.execute_request(request), context)?;
-    let payload = render_protocol_payload(request, &selected_protocol, &rows)?;
-    println!("{payload}");
+    render_protocol_payload(request, &selected_protocol, &rows)
+}
 
-    Ok(())
+fn with_jump_stream<T>(
+    target: &ExecutionTarget,
+    port: u16,
+    context: &ErrorContext,
+    logger: &mut logging::RuntimeLogger,
+    f: impl FnOnce(jump::JumpIo) -> RosWireResult<T>,
+) -> RosWireResult<T> {
+    let io = jump::open_channel(
+        &target.jump,
+        &target.host,
+        port,
+        target.connect_timeout,
+        context,
+    )?;
+    logger.log_jump("jump.opened", "ok", io.audit_value());
+    let leftover = io.leftover_handle();
+    let result = f(io);
+    if leftover.load(std::sync::atomic::Ordering::SeqCst) {
+        logger.log_jump(
+            "jump.closed",
+            "error",
+            serde_json::json!({ "leftover": true }),
+        );
+    } else {
+        logger.log_jump(
+            "jump.closed",
+            "ok",
+            serde_json::json!({ "leftover": false }),
+        );
+    }
+    jump::finish_with_leftover(result, &leftover)
 }
 
 #[derive(Debug, Serialize)]
@@ -264,6 +364,8 @@ struct CommandPlanPayload {
     will_modify_routeros: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     rest_mapping: Option<RestPlanMapping>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    via: Option<jump::JumpViaPlan>,
 }
 
 #[derive(Debug, Serialize)]
@@ -285,6 +387,32 @@ fn render_command_plan(
             method: mapping.method.as_str(),
             path: mapping.path.clone(),
         });
+    let env = read_env_map();
+    let profile = load_profile_for_plan(cli, &env)?;
+    let hops = jump::resolve_jump_identities(cli, profile.as_ref())?;
+    let target_host = cli
+        .host
+        .clone()
+        .or_else(|| profile.as_ref().and_then(|profile| profile.host.clone()));
+    let requested_protocol = cli
+        .protocol
+        .map(|protocol| protocol.as_str().to_owned())
+        .or_else(|| {
+            profile
+                .as_ref()
+                .and_then(|profile| profile.protocol.clone())
+        })
+        .unwrap_or_else(|| "auto".to_owned());
+    let target_port = if requested_protocol == "auto" {
+        None
+    } else {
+        Some(
+            cli.port
+                .or_else(|| profile.as_ref().and_then(|profile| profile.port))
+                .unwrap_or_else(|| default_port(&requested_protocol)),
+        )
+    };
+    let via = jump::JumpViaPlan::from_hops(hops, target_host, target_port);
 
     serialize_payload(
         &CommandPlanPayload {
@@ -293,11 +421,7 @@ fn render_command_plan(
             command: mapping::command_name(invocation),
             routeros_path: request.mapping.routeros_path.clone(),
             action: request.mapping.action_kind.as_str().to_owned(),
-            requested_protocol: cli
-                .protocol
-                .map(|protocol| protocol.as_str())
-                .unwrap_or("auto")
-                .to_owned(),
+            requested_protocol,
             selected_protocol: "not-selected",
             routeros_version: "not-probed",
             resolved_args: error::redact_resolved_args(&request.resolved_args),
@@ -307,9 +431,29 @@ fn render_command_plan(
             will_connect: false,
             will_modify_routeros: request.mapping.action_kind != ActionKind::Print,
             rest_mapping,
+            via,
         },
         "RouterOS command dry-run plan",
     )
+}
+
+fn load_profile_for_plan(
+    cli: &Cli,
+    env: &BTreeMap<String, String>,
+) -> RosWireResult<Option<config::ProfileConfig>> {
+    let paths = config::ConfigPaths::from_home(config::resolve_home_path(
+        env.get("ROSWIRE_HOME").map(String::as_str),
+    ));
+    if !paths.config.exists() {
+        return Ok(None);
+    }
+    let config_file = config::load_config_file(&paths.config)?;
+    let name = match config::select_active_profile(cli.profile.as_deref(), &config_file) {
+        Ok(name) => name,
+        Err(_) if cli.profile.is_none() => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    Ok(config_file.profiles.get(&name).cloned())
 }
 
 fn render_protocol_payload<T: Serialize>(
@@ -408,6 +552,12 @@ impl ProtocolProbe for LiveProtocolProbe<'_> {
 
 impl LiveProtocolProbe<'_> {
     fn probe_rest(&self) -> ProbeResult {
+        if !self.target.jump.is_empty() {
+            return match self.probe_rest_via_jump() {
+                Ok(result) => result,
+                Err(error) => classify_probe_error(&error),
+            };
+        }
         let client = match RestClient::https(
             &self.target.host,
             default_port("rest"),
@@ -427,7 +577,55 @@ impl LiveProtocolProbe<'_> {
         }
     }
 
+    fn probe_rest_via_jump(&self) -> RosWireResult<ProbeResult> {
+        let context = jump_probe_context(self.target);
+        let io = jump::open_channel(
+            &self.target.jump,
+            &self.target.host,
+            default_port("rest"),
+            self.target.connect_timeout,
+            &context,
+        )?;
+        let mut tls = protocol::classic::transport::wrap_tls_stream(
+            io,
+            &self.target.host,
+            &self.target.tls_trust(),
+        )?;
+        let value = protocol::rest::get_on_stream(
+            &mut tls,
+            &self.target.host,
+            default_port("rest"),
+            &self.target.user,
+            &self.target.password,
+            "/rest/system/resource",
+        )?;
+        Ok(ProbeResult::Success {
+            routeros_major: routeros_major_from_rest_resource(&value),
+            rest_supported_for_action: self.request.mapping.has_rest_mapping(),
+        })
+    }
+
     fn probe_api_ssl(&self) -> ProbeResult {
+        if !self.target.jump.is_empty() {
+            let context = jump_probe_context(self.target);
+            return match jump::open_channel(
+                &self.target.jump,
+                &self.target.host,
+                default_port("api-ssl"),
+                self.target.connect_timeout,
+                &context,
+            ) {
+                Ok(io) => match protocol::classic::transport::wrap_tls_stream(
+                    io,
+                    &self.target.host,
+                    &self.target.tls_trust(),
+                ) {
+                    Ok(stream) => self.probe_classic(stream),
+                    Err(error) => classify_probe_error(&error),
+                },
+                Err(error) => classify_probe_error(&error),
+            };
+        }
         match TlsApiStream::connect(
             &self.target.host,
             default_port("api-ssl"),
@@ -440,6 +638,19 @@ impl LiveProtocolProbe<'_> {
     }
 
     fn probe_api(&self) -> ProbeResult {
+        if !self.target.jump.is_empty() {
+            let context = jump_probe_context(self.target);
+            return match jump::open_channel(
+                &self.target.jump,
+                &self.target.host,
+                default_port("api"),
+                self.target.connect_timeout,
+                &context,
+            ) {
+                Ok(io) => self.probe_classic(io),
+                Err(error) => classify_probe_error(&error),
+            };
+        }
         match TcpApiStream::connect(
             &self.target.host,
             default_port("api"),
@@ -499,6 +710,8 @@ pub(crate) struct ExecutionTarget {
     pub(crate) routeros_version: String,
     pub(crate) port: u16,
     pub(crate) tls_cert_fingerprint: Option<String>,
+    pub(crate) jump: Vec<jump::ResolvedJumpHop>,
+    pub(crate) connect_timeout: Duration,
 }
 
 impl ExecutionTarget {
@@ -615,6 +828,9 @@ fn resolve_execution_target_with_env(
         )));
     }
 
+    let jump = jump::resolve_jump_hops(cli, env, profile)?;
+    let connect_timeout = Duration::from_secs(cli.connect_timeout_seconds.unwrap_or(10));
+
     Ok(ExecutionTarget {
         host,
         user,
@@ -623,6 +839,8 @@ fn resolve_execution_target_with_env(
         routeros_version,
         port,
         tls_cert_fingerprint,
+        jump,
+        connect_timeout,
     })
 }
 
@@ -683,7 +901,24 @@ fn execution_context(
         transfer_backend: None,
         routeros_version: target.routeros_version.clone(),
         host: target.host.clone(),
+        jump: jump::identities_from_hops(&target.jump)
+            .into_iter()
+            .map(|hop| hop.host)
+            .collect(),
         resolved_args: error::redact_resolved_args(&invocation.resolved_args),
+    }
+}
+
+fn jump_probe_context(target: &ExecutionTarget) -> ErrorContext {
+    ErrorContext {
+        command: "doctor".to_owned(),
+        requested_protocol: target.requested_protocol.clone(),
+        host: target.host.clone(),
+        jump: jump::identities_from_hops(&target.jump)
+            .into_iter()
+            .map(|hop| hop.host)
+            .collect(),
+        ..ErrorContext::default()
     }
 }
 
@@ -714,6 +949,7 @@ mod tests {
     use clap::Parser;
     use std::collections::BTreeMap;
     use std::fs;
+    use std::time::Duration;
 
     #[test]
     fn execution_target_uses_cli_values_and_defaults() {
@@ -739,6 +975,53 @@ mod tests {
         assert_eq!(target.requested_protocol, "auto");
         assert_eq!(target.routeros_version, "auto");
         assert_eq!(target.port, 8728);
+        assert!(target.jump.is_empty());
+        assert_eq!(target.connect_timeout, Duration::from_secs(10));
+    }
+
+    #[test]
+    fn execution_target_resolves_jump_from_cli() {
+        let cli = Cli::try_parse_from([
+            "roswire",
+            "--host",
+            "192.0.2.1",
+            "--user",
+            "admin",
+            "--password",
+            "test-value",
+            "--jump-host",
+            "bastion.example",
+            "--jump-user",
+            "ops",
+            "--jump-host-key",
+            "SHA256:bastion",
+            "--jump-password",
+            "jump-secret",
+            "--connect-timeout-seconds",
+            "3",
+            "--protocol",
+            "api",
+            "interface",
+            "print",
+        ])
+        .expect("cli should parse");
+        let env = isolated_env();
+        let target = resolve_execution_target_with_env(&cli, &env).expect("target should resolve");
+        assert_eq!(target.jump.len(), 1);
+        assert_eq!(target.jump[0].host, "bastion.example");
+        assert_eq!(target.jump[0].user, "ops");
+        assert_eq!(target.connect_timeout, Duration::from_secs(3));
+        let context = execution_context(
+            &ParsedInvocation {
+                path: vec!["interface".to_owned()],
+                action: "print".to_owned(),
+                resolved_args: BTreeMap::new(),
+                flags: Vec::new(),
+            },
+            &target,
+            "api",
+        );
+        assert_eq!(context.jump, vec!["bastion.example".to_owned()]);
     }
 
     #[test]
@@ -1121,6 +1404,8 @@ value = "v1:nonce:ciphertext"
             routeros_version: "v7".to_owned(),
             port: 8728,
             tls_cert_fingerprint: None,
+            jump: Vec::new(),
+            connect_timeout: Duration::from_secs(10),
         };
 
         let context = execution_context(&invocation, &target, "api");

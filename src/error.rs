@@ -26,6 +26,9 @@ pub enum ErrorCode {
     SshWhitelistRequired,
     SshWhitelistUnsafe,
     SshRestoreFailed,
+    JumpHostKeyRequired,
+    JumpHostKeyMismatch,
+    JumpTeardownFailed,
     FileTooLarge,
     FileTransferFailed,
     InternalError,
@@ -44,6 +47,8 @@ pub struct ErrorContext {
     pub transfer_backend: Option<String>,
     pub routeros_version: String,
     pub host: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub jump: Vec<String>,
     pub resolved_args: BTreeMap<String, String>,
 }
 
@@ -58,6 +63,7 @@ impl Default for ErrorContext {
             transfer_backend: None,
             routeros_version: "unknown".to_owned(),
             host: String::new(),
+            jump: Vec::new(),
             resolved_args: BTreeMap::new(),
         }
     }
@@ -212,6 +218,40 @@ impl RosWireError {
             message: message.into(),
             hint: Some(
                 "inspect `/ip service ssh` manually and restore the pre-transfer address/disabled state".to_owned(),
+            ),
+            context: ErrorContext::default(),
+            exit_code: 6,
+        }
+    }
+
+    pub fn jump_host_key_required(message: impl Into<String>) -> Self {
+        Self {
+            error_code: ErrorCode::JumpHostKeyRequired,
+            message: message.into(),
+            hint: Some(
+                "set --jump-host-key or profile jump host_key before using an SSH jump".to_owned(),
+            ),
+            context: ErrorContext::default(),
+            exit_code: 2,
+        }
+    }
+
+    pub fn jump_host_key_mismatch(message: impl Into<String>) -> Self {
+        Self {
+            error_code: ErrorCode::JumpHostKeyMismatch,
+            message: message.into(),
+            hint: Some("verify the jump host SSH key fingerprint out-of-band".to_owned()),
+            context: ErrorContext::default(),
+            exit_code: 3,
+        }
+    }
+
+    pub fn jump_teardown_failed(message: impl Into<String>) -> Self {
+        Self {
+            error_code: ErrorCode::JumpTeardownFailed,
+            message: message.into(),
+            hint: Some(
+                "inspect local listeners and leftover SSH channels; roswire does not keep jump state on purpose".to_owned(),
             ),
             context: ErrorContext::default(),
             exit_code: 6,
@@ -552,6 +592,18 @@ mod tests {
         assert_eq!(restore_failed.error_code, ErrorCode::SshRestoreFailed);
         assert_eq!(restore_failed.exit_code(), 6);
 
+        let jump_key = RosWireError::jump_host_key_required("jump host key required");
+        assert_eq!(jump_key.error_code, ErrorCode::JumpHostKeyRequired);
+        assert_eq!(jump_key.exit_code(), 2);
+
+        let jump_mismatch = RosWireError::jump_host_key_mismatch("jump host key mismatch");
+        assert_eq!(jump_mismatch.error_code, ErrorCode::JumpHostKeyMismatch);
+        assert_eq!(jump_mismatch.exit_code(), 3);
+
+        let jump_teardown = RosWireError::jump_teardown_failed("teardown failed");
+        assert_eq!(jump_teardown.error_code, ErrorCode::JumpTeardownFailed);
+        assert_eq!(jump_teardown.exit_code(), 6);
+
         let too_large = RosWireError::file_too_large("too large");
         assert_eq!(too_large.error_code, ErrorCode::FileTooLarge);
         assert_eq!(too_large.exit_code(), 2);
@@ -575,6 +627,7 @@ mod tests {
             transfer_backend: Some("ssh".to_owned()),
             routeros_version: "v7".to_owned(),
             host: "router.local".to_owned(),
+            jump: Vec::new(),
             resolved_args: args,
         };
 

@@ -174,11 +174,7 @@ impl TcpApiStream {
     }
 }
 
-pub struct TlsApiStream {
-    inner: StreamOwned<ClientConnection, TcpStream>,
-}
-
-impl TlsApiStream {
+impl TlsStream<TcpStream> {
     pub fn connect(
         host: &str,
         port: u16,
@@ -186,28 +182,48 @@ impl TlsApiStream {
         trust: &TlsTrust,
     ) -> RosWireResult<Self> {
         let stream = connect_tcp_stream(host, port, timeout, "RouterOS API TLS")?;
-        let server_name_host = tls_server_name_host(host);
-        let server_name = ServerName::try_from(server_name_host.clone()).map_err(|error| {
-            Box::new(network_error(format!(
-                "invalid RouterOS API TLS server name `{server_name_host}`: {error}",
-            )))
-        })?;
-        let config = build_tls_client_config(trust)?;
-        let connection = ClientConnection::new(config, server_name).map_err(|error| {
-            Box::new(network_error(format!(
-                "failed to initialize RouterOS API TLS connection: {error}",
-            )))
-        })?;
-        let mut inner = StreamOwned::new(connection, stream);
-        while inner.conn.is_handshaking() {
-            inner.conn.complete_io(&mut inner.sock).map_err(|error| {
-                Box::new(network_error(format!(
-                    "RouterOS API TLS handshake failed at {host}:{port}: {error}",
-                )))
-            })?;
-        }
+        wrap_tls_stream(stream, host, trust)
+    }
+}
 
-        Ok(Self { inner })
+pub fn wrap_tls_stream<S: Read + Write>(
+    stream: S,
+    host: &str,
+    trust: &TlsTrust,
+) -> RosWireResult<TlsStream<S>> {
+    let server_name_host = tls_server_name_host(host);
+    let server_name = ServerName::try_from(server_name_host.clone()).map_err(|error| {
+        Box::new(network_error(format!(
+            "invalid RouterOS API TLS server name `{server_name_host}`: {error}",
+        )))
+    })?;
+    let config = build_tls_client_config(trust)?;
+    let connection = ClientConnection::new(config, server_name).map_err(|error| {
+        Box::new(network_error(format!(
+            "failed to initialize RouterOS API TLS connection: {error}",
+        )))
+    })?;
+    let mut inner = StreamOwned::new(connection, stream);
+    while inner.conn.is_handshaking() {
+        inner.conn.complete_io(&mut inner.sock).map_err(|error| {
+            Box::new(network_error(format!(
+                "RouterOS API TLS handshake failed for `{host}`: {error}",
+            )))
+        })?;
+    }
+
+    Ok(TlsStream { inner })
+}
+
+pub struct TlsStream<S: Read + Write> {
+    inner: StreamOwned<ClientConnection, S>,
+}
+
+pub type TlsApiStream = TlsStream<TcpStream>;
+
+impl<S: Read + Write> TlsStream<S> {
+    pub fn into_socket(self) -> S {
+        self.inner.sock
     }
 }
 
@@ -244,13 +260,13 @@ impl Write for TcpApiStream {
     }
 }
 
-impl Read for TlsApiStream {
+impl<S: Read + Write> Read for TlsStream<S> {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
         self.inner.read(buffer)
     }
 }
 
-impl Write for TlsApiStream {
+impl<S: Read + Write> Write for TlsStream<S> {
     fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
         self.inner.write(buffer)
     }

@@ -2,7 +2,7 @@
 
 > 最后更新：2026-06-12
 > 基准分支：`main`
-> 当前版本：`v0.1.2`（MVP / Beta 候选）
+> 当前版本：`v0.1.3`（MVP / Beta 候选）
 > 关联文档：[`feature-checklist.md`](feature-checklist.md)（功能总账）、[`develop-plan.md`](develop-plan.md)（实现规格）、[`mcp-server-development-plan.md`](mcp-server-development-plan.md)（服务化设计）、[`production-readiness.md`](production-readiness.md)（生产门槛）
 
 本文是 `roswire` 的**对外路线图**：用里程碑和时间视角（Now / Next / Later）说明项目要去哪、按什么顺序去、每一步以什么标准算"到达"。它面向使用者、贡献者与协作 Agent，回答"接下来会做什么、什么时候算完成"。
