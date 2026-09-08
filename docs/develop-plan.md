@@ -25,7 +25,16 @@
 
 ### 无状态执行
 
-每次执行都是一次独立的 TCP/TLS/HTTP 生命周期。CLI 不假设上一次调用留下的本地状态。
+每次执行都是一次独立的传输生命周期。直连时为 TCP/TLS/HTTP；配置 SSH 跳板时为「本次进程内的 SSH session + `direct-tcpip` channel + API/REST/SFTP」。CLI 不假设上一次调用留下的本地状态，也不保存长期会话或连接池。
+
+跳板是传输适配，不是隧道产品：
+
+- 必须显式配置（`--jump-host` 或 profile `[[jump]]`），禁止 `protocol=auto` 时静默探测跳板。
+- 使用 SSH `direct-tcpip` 到达目标管理端口；禁止在 `127.0.0.1` 上做 `ssh -L` / SOCKS 本地监听。
+- 跳板 host key 必须预先 pin，禁止 TOFU 与交互确认。
+- 进程退出即拆除 channel/session；拆除失败返回 `JUMP_TEARDOWN_FAILED` 且 `leftover=true`，不得把 RouterOS 命令成功当成整次调用成功。
+- 审计写入 JSONL（`jump.opened` / `jump.closed` / `jump.failed`）；默认 stdout 不含时间戳、密码、私钥路径。
+- 不把跳板实现进 `sshx`；`sshx` 仍保持一命令一连接、无 port-forward。
 
 ### 确定性输出
 
@@ -82,6 +91,13 @@ roswire ip address remove .id=*1 --json
 | `--ssh-key <path>` | `ssh_key` | SSH 私钥路径；设置后优先使用 key auth |
 | - | secret `ssh_key_passphrase` | 加密 SSH 私钥 passphrase；通过 profile secret 非交互提供 |
 | `--ssh-host-key <fingerprint>` | `ssh_host_key` | RouterOS SSH host key 指纹；用于非交互校验服务器身份 |
+| `--jump-host <host>` | `[[profiles.*.jump]]` `host` | SSH 跳板主机；设置后本次调用经 `direct-tcpip` 到达 RouterOS，退出即拆 |
+| `--jump-port <port>` | jump `port` | 跳板 SSH 端口，默认 `22` |
+| `--jump-user <user>` | jump `user` | 跳板 SSH 用户名；不复用 RouterOS API user |
+| `--jump-password <password>` | secret `jump_password` / `jump_<n>_password` | 跳板 SSH 密码；不推荐直接出现在 shell history |
+| `--jump-key <path>` | jump `key` | 跳板 SSH 私钥；设置后优先 key auth |
+| - | secret `jump_key_passphrase` / `jump_<n>_key_passphrase` | 跳板加密私钥 passphrase |
+| `--jump-host-key <fingerprint>` | jump `host_key` | 跳板 SSH host key 指纹；缺省返回 `JUMP_HOST_KEY_REQUIRED` |
 | `--allow-from <cidr>` | `allow_from` | 允许访问 SSH 服务的客户端来源 CIDR，用于 `/ip service ssh address` |
 | `--ensure-ssh` | - | 允许 `roswire` 通过 API/REST 启用 SSH 服务并设置白名单 |
 | `--restore-ssh` | - | 文件传输结束后恢复进入任务前的 SSH 服务配置 |
@@ -126,6 +142,12 @@ transfer = "ssh"
 ssh_port = 22
 ssh_host_key = "SHA256:replace-with-routeros-host-key"
 allow_from = "203.0.113.10/32"
+
+[[profiles.home.jump]]
+host = "bastion.example"
+port = 22
+user = "ops"
+host_key = "SHA256:replace-with-bastion-host-key"
 
 [profiles.home.secrets.password]
 type = "keychain"

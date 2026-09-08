@@ -92,6 +92,17 @@ pub struct ProfileConfig {
     pub allow_plain_secrets: bool,
     #[serde(default)]
     pub secrets: BTreeMap<String, SecretSpec>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub jump: Vec<JumpHopConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq)]
+pub struct JumpHopConfig {
+    pub host: Option<String>,
+    pub port: Option<u16>,
+    pub user: Option<String>,
+    pub key: Option<String>,
+    pub host_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -162,7 +173,21 @@ pub struct ConfigInspect {
     pub logging: LoggingConfig,
     pub resolved: BTreeMap<String, ResolvedField>,
     pub secrets: BTreeMap<String, SecretInspectField>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub jump: Vec<JumpHopInspect>,
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct JumpHopInspect {
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_key: Option<String>,
+    pub source: ValueSource,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -768,6 +793,55 @@ pub fn inspect_config(
         profile.tls_cert_fingerprint.as_deref(),
         None,
     );
+    let jump_host_cli = cli.jump_host.as_deref();
+    let jump_host_profile = profile.jump.first().and_then(|hop| hop.host.as_deref());
+    insert_resolved_field(
+        &mut resolved,
+        "jump_host",
+        jump_host_cli,
+        jump_host_profile,
+        None,
+    );
+    let jump_port_cli = cli.jump_port.map(|value| value.to_string());
+    let jump_port_profile = profile
+        .jump
+        .first()
+        .and_then(|hop| hop.port)
+        .map(|value| value.to_string());
+    insert_resolved_field(
+        &mut resolved,
+        "jump_port",
+        jump_port_cli.as_deref(),
+        jump_port_profile.as_deref(),
+        None,
+    );
+    insert_resolved_field(
+        &mut resolved,
+        "jump_user",
+        cli.jump_user.as_deref(),
+        profile.jump.first().and_then(|hop| hop.user.as_deref()),
+        None,
+    );
+    let jump_key_cli = cli.jump_key.as_deref().map(redact_local_path_for_inspect);
+    let jump_key_profile = profile
+        .jump
+        .first()
+        .and_then(|hop| hop.key.as_deref())
+        .map(redact_local_path_for_inspect);
+    insert_resolved_field(
+        &mut resolved,
+        "jump_key",
+        jump_key_cli.as_deref(),
+        jump_key_profile.as_deref(),
+        None,
+    );
+    insert_resolved_field(
+        &mut resolved,
+        "jump_host_key",
+        cli.jump_host_key.as_deref(),
+        profile.jump.first().and_then(|hop| hop.host_key.as_deref()),
+        None,
+    );
     let allow_from_cli = (!cli.allow_from.is_empty()).then(|| cli.allow_from.join(","));
     let allow_from_profile = (!profile.allow_from.is_empty()).then(|| profile.allow_from.join(","));
     insert_resolved_field(
@@ -789,8 +863,37 @@ pub fn inspect_config(
         logging: config.logging.clone(),
         resolved,
         secrets,
+        jump: inspect_jump_hops(cli, profile),
         warnings: Vec::new(),
     })
+}
+
+fn inspect_jump_hops(cli: &Cli, profile: &ProfileConfig) -> Vec<JumpHopInspect> {
+    if let Some(host) = cli.jump_host.clone() {
+        return vec![JumpHopInspect {
+            host,
+            port: cli.jump_port.unwrap_or(22),
+            user: cli.jump_user.clone().unwrap_or_default(),
+            key: cli.jump_key.as_deref().map(redact_local_path_for_inspect),
+            host_key: cli.jump_host_key.clone(),
+            source: ValueSource::Cli,
+        }];
+    }
+
+    profile
+        .jump
+        .iter()
+        .filter_map(|hop| {
+            Some(JumpHopInspect {
+                host: hop.host.clone()?,
+                port: hop.port.unwrap_or(22),
+                user: hop.user.clone().unwrap_or_default(),
+                key: hop.key.as_deref().map(redact_local_path_for_inspect),
+                host_key: hop.host_key.clone(),
+                source: ValueSource::Profile,
+            })
+        })
+        .collect()
 }
 
 fn insert_resolved_field(
@@ -1037,6 +1140,27 @@ fn handle_config_device(tokens: &[String]) -> RosWireResult<String> {
             "tls_cert_fingerprint" | "tls-cert-fingerprint" => {
                 profile.tls_cert_fingerprint = Some(value);
                 updated_fields.push("tls_cert_fingerprint".to_owned());
+            }
+            "jump_host" | "jump-host" => {
+                validate_remote_host(&value)?;
+                ensure_single_jump(profile).host = Some(value);
+                updated_fields.push("jump_host".to_owned());
+            }
+            "jump_port" | "jump-port" => {
+                ensure_single_jump(profile).port = Some(parse_port(&value)?);
+                updated_fields.push("jump_port".to_owned());
+            }
+            "jump_user" | "jump-user" => {
+                ensure_single_jump(profile).user = Some(value);
+                updated_fields.push("jump_user".to_owned());
+            }
+            "jump_key" | "jump-key" => {
+                ensure_single_jump(profile).key = Some(value);
+                updated_fields.push("jump_key".to_owned());
+            }
+            "jump_host_key" | "jump-host-key" => {
+                ensure_single_jump(profile).host_key = Some(value);
+                updated_fields.push("jump_host_key".to_owned());
             }
             "allow_from" | "allow-from" => {
                 profile.allow_from = parse_allow_from_list(&value)?;
@@ -1382,6 +1506,16 @@ fn normalize_transfer(value: &str) -> RosWireResult<String> {
     }
 }
 
+fn ensure_single_jump(profile: &mut ProfileConfig) -> &mut JumpHopConfig {
+    if profile.jump.len() != 1 {
+        profile.jump = vec![JumpHopConfig::default()];
+    }
+    profile
+        .jump
+        .first_mut()
+        .expect("jump hop was just inserted")
+}
+
 fn parse_port(value: &str) -> RosWireResult<u16> {
     value.parse::<u16>().map_err(|error| {
         Box::new(RosWireError::usage(format!(
@@ -1559,6 +1693,36 @@ retention_days = 7
             .hint
             .as_deref()
             .is_some_and(|hint| hint.contains("Layer 2 discovery is not supported")));
+    }
+
+    #[test]
+    fn parses_multi_hop_jump_table() {
+        let config = parse_config_toml(
+            r#"
+version = 1
+
+[profiles.lab]
+host = "192.168.88.1"
+user = "admin"
+
+[[profiles.lab.jump]]
+host = "edge.example"
+user = "ops"
+host_key = "SHA256:edge"
+
+[[profiles.lab.jump]]
+host = "core.example"
+port = 2222
+user = "net"
+host_key = "SHA256:core"
+"#,
+        )
+        .expect("config should parse");
+        let jump = &config.profiles["lab"].jump;
+        assert_eq!(jump.len(), 2);
+        assert_eq!(jump[0].host.as_deref(), Some("edge.example"));
+        assert_eq!(jump[1].port, Some(2222));
+        assert_eq!(jump[1].user.as_deref(), Some("net"));
     }
 
     #[test]

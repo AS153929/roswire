@@ -21,6 +21,7 @@ Unlike traditional CLIs designed for human interaction, `roswire` does not emit 
 - **Protocol and dialect layering:** supports RouterOS native API (`8728` / `8729`) with v6/v7 dialects plus RouterOS v7 REST API.
 - **Single native binary:** distributed as one Rust binary; no Node.js, Python, Go, or other runtime required.
 - **Agent-friendly self-correction:** errors include stable error codes, redacted context, and optional repair hints.
+- **SSH jump without leftover tunnels:** unreachable RouterOS management planes can be reached through an explicit SSH `direct-tcpip` hop that is torn down when the process exits and recorded in JSONL.
 
 ## Installation
 
@@ -140,6 +141,8 @@ roswire config secret set studio password type=keychain service=roswire account=
 roswire --profile studio interface print --json
 ```
 
+If API/REST is only reachable through an SSH bastion, set `jump_host` / `jump_user` / `jump_host_key` on the profile (or pass `--jump-host`). roswire opens `direct-tcpip` for this process, tears it down on exit, and records the hop in JSONL. It does not leave a local `ssh -L` listener.
+
 Output (`stdout`) is structured JSON; errors go to `stderr` as one structured JSON object.
 
 ## Common tasks
@@ -152,6 +155,7 @@ Output (`stdout`) is structured JSON; errors go to `stderr` as one structured JS
 | Inventory interfaces, addresses, routes, and resources | `roswire --profile studio interface print --json`, `roswire --profile studio ip address print --json`, `roswire --profile studio ip route print --json`, `roswire --profile studio system resource print --json` |
 | Run unsupported read-only RouterOS print commands | `roswire --profile studio raw /system/resource/print --json` |
 | Preview file transfers safely | `roswire --profile studio file upload ./setup.rsc flash/setup.rsc --dry-run --ssh-host-key SHA256:replace-with-routeros-host-key --allow-from 203.0.113.10/32 --json` |
+| Reach a private RouterOS through an SSH jump | `roswire --profile studio --dry-run ip address print --json` after setting `jump_host` / `jump_host_key` |
 
 ## Command usage examples
 

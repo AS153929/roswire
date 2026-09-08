@@ -173,6 +173,11 @@ fn transfer_context(
             .clone()
             .or_else(|| profile.and_then(|profile| profile.host.clone()))
             .unwrap_or_default(),
+        jump: crate::jump::resolve_jump_identities(cli, profile)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|hop| hop.host)
+            .collect(),
         resolved_args: error::redact_resolved_args(&command.context_args()),
     }
 }
@@ -1913,6 +1918,7 @@ value = "profile-secret"
             password: "test-value".to_owned(),
             selected_protocol: "api".to_owned(),
             tls_cert_fingerprint: None,
+            jump: Vec::new(),
         };
 
         execute_classic_control(
@@ -2276,6 +2282,7 @@ value = "profile-secret"
                 key_path: None,
                 key_passphrase: None,
                 expected_host_key: "SHA256:test".to_owned(),
+                jump: Vec::new(),
             },
             ControlRuntimeConfig {
                 host: "127.0.0.1".to_owned(),
@@ -2284,6 +2291,7 @@ value = "profile-secret"
                 password: "api-secret".to_owned(),
                 selected_protocol: selected_protocol.to_owned(),
                 tls_cert_fingerprint: None,
+                jump: Vec::new(),
             },
             default_transfer_policy(),
         )
@@ -2299,6 +2307,7 @@ value = "profile-secret"
             transfer_backend: Some("ssh".to_owned()),
             routeros_version: "auto".to_owned(),
             host: "198.51.100.10".to_owned(),
+            jump: Vec::new(),
             resolved_args: BTreeMap::new(),
         }
     }

@@ -104,6 +104,7 @@ pub(super) fn resolve_ssh_runtime_config(
         key_path,
         key_passphrase,
         expected_host_key,
+        jump: crate::jump::resolve_jump_hops(cli, env, profile)?,
     })
 }
 
@@ -217,6 +218,7 @@ pub(super) fn resolve_control_runtime_config(
         password,
         selected_protocol,
         tls_cert_fingerprint,
+        jump: crate::jump::resolve_jump_hops(cli, env, profile)?,
     })
 }
 
@@ -258,12 +260,49 @@ pub(super) fn default_control_port(protocol: &str) -> u16 {
     }
 }
 
+fn with_control_jump<T>(
+    control: &ControlRuntimeConfig,
+    context: &ErrorContext,
+    f: impl FnOnce(crate::jump::JumpIo) -> RosWireResult<T>,
+) -> RosWireResult<T> {
+    let io = crate::jump::open_channel(
+        &control.jump,
+        &control.host,
+        control.port,
+        Duration::from_secs(10),
+        context,
+    )?;
+    let leftover = io.leftover_handle();
+    crate::jump::finish_with_leftover(f(io), &leftover)
+}
+
 pub(super) fn execute_rest_control(
     command: &ControlCommand,
     control: &ControlRuntimeConfig,
     context: ErrorContext,
 ) -> RosWireResult<()> {
     let (path, body) = command.rest_request();
+    if !control.jump.is_empty() {
+        return with_control_jump(control, &context, |io| {
+            let mut tls = crate::protocol::classic::transport::wrap_tls_stream(
+                io,
+                &control.host,
+                &control.tls_trust(),
+            )?;
+            crate::protocol::rest::send_on_stream(
+                &mut tls,
+                &control.host,
+                control.port,
+                &control.user,
+                &control.password,
+                crate::mapping::RestMethod::Post,
+                path,
+                Some(&body),
+            )
+            .map(|_| ())
+        })
+        .map_err(|error| Box::new((*error).clone().with_context(context)));
+    }
     let client = RestClient::https(
         &control.host,
         control.port,
@@ -298,6 +337,37 @@ pub(super) fn read_ssh_service(
     control: &ControlRuntimeConfig,
     context: ErrorContext,
 ) -> RosWireResult<SshServiceSnapshot> {
+    if !control.jump.is_empty() {
+        return with_control_jump(control, &context, |io| {
+            match control.selected_protocol.as_str() {
+                "rest" => {
+                    let mut tls = crate::protocol::classic::transport::wrap_tls_stream(
+                        io,
+                        &control.host,
+                        &control.tls_trust(),
+                    )?;
+                    let value = crate::protocol::rest::get_on_stream(
+                        &mut tls,
+                        &control.host,
+                        control.port,
+                        &control.user,
+                        &control.password,
+                        "/rest/ip/service",
+                    )?;
+                    ssh_service_snapshot_from_json(&value)
+                }
+                "api-ssl" => {
+                    let stream = crate::protocol::classic::transport::wrap_tls_stream(
+                        io,
+                        &control.host,
+                        &control.tls_trust(),
+                    )?;
+                    read_classic_ssh_service(stream, control, context.clone())
+                }
+                _ => read_classic_ssh_service(io, control, context.clone()),
+            }
+        });
+    }
     match control.selected_protocol.as_str() {
         "rest" => read_rest_ssh_service(control, context),
         "api-ssl" => {
@@ -324,6 +394,43 @@ pub(super) fn apply_ssh_service(
     desired: &SshServiceSnapshot,
     context: ErrorContext,
 ) -> RosWireResult<()> {
+    if !control.jump.is_empty() {
+        return with_control_jump(control, &context, |io| {
+            match control.selected_protocol.as_str() {
+                "rest" => {
+                    let id = desired.id.as_deref().unwrap_or("ssh");
+                    let mut tls = crate::protocol::classic::transport::wrap_tls_stream(
+                        io,
+                        &control.host,
+                        &control.tls_trust(),
+                    )?;
+                    crate::protocol::rest::send_on_stream(
+                        &mut tls,
+                        &control.host,
+                        control.port,
+                        &control.user,
+                        &control.password,
+                        crate::mapping::RestMethod::Patch,
+                        &format!("/rest/ip/service/{id}"),
+                        Some(&serde_json::json!({
+                            "disabled": routeros_bool(desired.disabled),
+                            "address": desired.address.join(","),
+                        })),
+                    )
+                    .map(|_| ())
+                }
+                "api-ssl" => {
+                    let stream = crate::protocol::classic::transport::wrap_tls_stream(
+                        io,
+                        &control.host,
+                        &control.tls_trust(),
+                    )?;
+                    apply_classic_ssh_service(stream, control, desired, context.clone())
+                }
+                _ => apply_classic_ssh_service(io, control, desired, context.clone()),
+            }
+        });
+    }
     match control.selected_protocol.as_str() {
         "rest" => apply_rest_ssh_service(control, desired, context),
         "api-ssl" => {
@@ -459,20 +566,21 @@ pub(super) fn execute_upload(
         ));
     }
 
-    let session = open_ssh_session(config, policy, context)?;
-    let sftp = match session.sftp() {
-        Ok(sftp) => sftp,
-        Err(error) => {
-            return sftp_or_scp_fallback(
-                "upload",
-                Err(sftp_session_unavailable_error(error, context)),
-                || execute_scp_upload(&session, local, remote, metadata.len(), context),
-                context,
-            );
-        }
-    };
+    with_ssh_session(config, policy, context, |session| {
+        let sftp = match session.sftp() {
+            Ok(sftp) => sftp,
+            Err(error) => {
+                return sftp_or_scp_fallback(
+                    "upload",
+                    Err(sftp_session_unavailable_error(error, context)),
+                    || execute_scp_upload(session, local, remote, metadata.len(), context),
+                    context,
+                );
+            }
+        };
 
-    execute_sftp_upload(&sftp, local, remote, context)
+        execute_sftp_upload(&sftp, local, remote, context)
+    })
 }
 
 pub(super) fn execute_sftp_upload(
@@ -531,20 +639,21 @@ pub(super) fn execute_download(
     policy: &TransferPolicy,
     context: &ErrorContext,
 ) -> RosWireResult<(u64, String)> {
-    let session = open_ssh_session(config, policy, context)?;
-    let sftp = match session.sftp() {
-        Ok(sftp) => sftp,
-        Err(error) => {
-            return sftp_or_scp_fallback(
-                "download",
-                Err(sftp_session_unavailable_error(error, context)),
-                || execute_scp_download(&session, remote, local, context),
-                context,
-            );
-        }
-    };
+    with_ssh_session(config, policy, context, |session| {
+        let sftp = match session.sftp() {
+            Ok(sftp) => sftp,
+            Err(error) => {
+                return sftp_or_scp_fallback(
+                    "download",
+                    Err(sftp_session_unavailable_error(error, context)),
+                    || execute_scp_download(session, remote, local, context),
+                    context,
+                );
+            }
+        };
 
-    execute_sftp_download(&sftp, remote, local, context)
+        execute_sftp_download(&sftp, remote, local, context)
+    })
 }
 
 pub(super) fn execute_sftp_download(
@@ -671,11 +780,50 @@ pub(super) fn finish_scp_channel(
     })
 }
 
+pub(super) fn with_ssh_session<T>(
+    config: &SshRuntimeConfig,
+    policy: &TransferPolicy,
+    context: &ErrorContext,
+    f: impl FnOnce(&ssh2::Session) -> RosWireResult<T>,
+) -> RosWireResult<T> {
+    if !config.jump.is_empty() {
+        let io = crate::jump::open_channel(
+            &config.jump,
+            &config.host,
+            config.port,
+            policy.connect_timeout(),
+            context,
+        )?;
+        let leftover = io.leftover_handle();
+        let jump_session = io.into_target_ssh_session(
+            &config.user,
+            config.password.as_deref(),
+            config.key_path.as_deref(),
+            config.key_passphrase.as_deref(),
+            &config.expected_host_key,
+            context,
+        )?;
+        let result = f(&jump_session.session);
+        drop(jump_session);
+        return crate::jump::finish_with_leftover(result, &leftover);
+    }
+    let (session, leftover) = open_ssh_session(config, policy, context)?;
+    let result = f(&session);
+    drop(session);
+    match leftover {
+        Some(flag) => crate::jump::finish_with_leftover(result, &flag),
+        None => result,
+    }
+}
+
 pub(super) fn open_ssh_session(
     config: &SshRuntimeConfig,
     policy: &TransferPolicy,
     context: &ErrorContext,
-) -> RosWireResult<ssh2::Session> {
+) -> RosWireResult<(
+    ssh2::Session,
+    Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+)> {
     let address = format!("{}:{}", config.host, config.port);
     let socket_addr = address
         .to_socket_addrs()
@@ -700,14 +848,22 @@ pub(super) fn open_ssh_session(
         })?;
     tcp.set_read_timeout(Some(policy.transfer_timeout())).ok();
     tcp.set_write_timeout(Some(policy.transfer_timeout())).ok();
+    let session = open_ssh_session_from_stream(tcp, config, context)?;
+    Ok((session, None))
+}
 
+fn open_ssh_session_from_stream(
+    stream: TcpStream,
+    config: &SshRuntimeConfig,
+    context: &ErrorContext,
+) -> RosWireResult<ssh2::Session> {
     let mut session = ssh2::Session::new().map_err(|error| {
         Box::new(
             RosWireError::file_transfer_failed(format!("failed to create SSH session: {error}"))
                 .with_context(context.clone()),
         )
     })?;
-    session.set_tcp_stream(tcp);
+    session.set_tcp_stream(stream);
     session.handshake().map_err(|error| {
         Box::new(
             RosWireError::network(format!("SSH handshake failed: {error}"))

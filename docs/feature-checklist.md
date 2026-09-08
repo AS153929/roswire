@@ -253,6 +253,25 @@
 - [ ] 中断路径自动 restore（当前在 dry-run 明确限制：不捕获进程中断）
 - [x] 白名单追加/合并现有地址而非覆盖
 
+## SSH 跳板传输（L0）
+
+> 评审结论：跳板是一次 CLI 调用内的 `direct-tcpip` 传输适配。不引入 daemon、不本地 bind、不修改 sshx。
+
+- [x] profile `[[jump]]` 多跳配置与 CLI `--jump-*` 单跳覆盖
+- [x] `config device add/set` 支持 `jump_host` / `jump_port` / `jump_user` / `jump_key` / `jump_host_key`
+- [x] `config inspect` 输出跳板身份（私钥路径脱敏）
+- [x] 缺跳板 host key 返回 `JUMP_HOST_KEY_REQUIRED`
+- [x] 跳板 host key 不匹配返回 `JUMP_HOST_KEY_MISMATCH`
+- [x] 拆除失败返回 `JUMP_TEARDOWN_FAILED` 且不得把命令成功当作调用成功
+- [x] `plan_dials`：首跳 TCP connect，后续与目标为 `direct-tcpip`；无本地监听
+- [x] API / API-SSL / REST 经同一跳板到达目标管理端口
+- [x] SFTP/SCP 经跳板到达 RouterOS SSH
+- [x] Drop / 显式 close 拆除 channel 与 session
+- [x] `--dry-run` 命令计划与 transfer plan 含 `via.jump`（`local_bind=false`，`will_connect=false`）
+- [x] JSONL `jump.opened` / `jump.closed` / `jump.failed`，secret 脱敏
+- [x] `doctor` 报告跳板配置；`--include-remote` 分腿报告 bastion 与 target
+- [ ] 真机双跳 / 多跳验收记录
+
 ## JSONL 日志与调试
 
 - [x] `[logging] enabled`
@@ -293,6 +312,9 @@
 - [x] `SSH_WHITELIST_REQUIRED`
 - [x] `SSH_WHITELIST_UNSAFE`
 - [x] `SSH_RESTORE_FAILED`
+- [x] `JUMP_HOST_KEY_REQUIRED`
+- [x] `JUMP_HOST_KEY_MISMATCH`
+- [x] `JUMP_TEARDOWN_FAILED`
 - [x] `FILE_TOO_LARGE`
 - [x] `FILE_TRANSFER_FAILED`
 - [x] `SERIALIZATION_ERROR`
